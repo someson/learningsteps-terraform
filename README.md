@@ -4,6 +4,8 @@ A one-command Azure deployment of the [LearningSteps](https://github.com/Cyberst
 
 For the walkthrough built on top of this deployment, see [handbook.md](handbook.md).
 
+**Security hardening documentation:** see [security/](security/README.md). Start with the [baseline security assessment](security/00-baseline-assessment.md).
+
 > **This deployment is intentionally minimal and unsecured.** The VM is publicly reachable, the database accepts connections from any IP, credentials are stored in plaintext, and there is no traffic inspection or monitoring. It is a starting point — not a production setup.
 
 ## What Gets Deployed
