@@ -12,6 +12,12 @@ resource "azurerm_log_analytics_workspace" "main" {
   resource_group_name = azurerm_resource_group.main.name
   sku                 = "PerGB2018"
   retention_in_days   = 30
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
+  }
 }
 
 # ── Microsoft Sentinel ────────────────────────────────────────────────────────
@@ -29,6 +35,12 @@ resource "azurerm_virtual_machine_extension" "ama" {
   auto_upgrade_minor_version = true
 
   depends_on = [azurerm_virtual_machine_extension.aad_ssh]
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
+  }
 }
 
 # ── Data Collection Rule: syslog → Log Analytics ──────────────────────────────
@@ -57,6 +69,12 @@ resource "azurerm_monitor_data_collection_rule" "syslog" {
       log_levels     = ["Debug", "Info", "Notice", "Warning", "Error", "Critical", "Alert", "Emergency"]
       streams        = ["Microsoft-Syslog"]
     }
+  }
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
   }
 }
 
@@ -144,8 +162,8 @@ resource "azurerm_resource_group_template_deployment" "block_ip_playbook" {
   template_content = file("${path.module}/templates/block-ip-playbook.json")
 
   parameters_content = jsonencode({
-    PlaybookName = { value = "playbook-block-ip-${var.prefix}" }
-    NsgName      = { value = azurerm_network_security_group.app.name }
+    playbookName = { value = "playbook-block-ip-${var.prefix}" }
+    nsgName      = { value = azurerm_network_security_group.app.name }
   })
 
   depends_on = [azurerm_sentinel_log_analytics_workspace_onboarding.main]

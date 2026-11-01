@@ -3,6 +3,12 @@ resource "azurerm_virtual_network" "main" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   address_space       = ["10.0.0.0/16"]
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
+  }
 }
 
 resource "azurerm_subnet" "app" {
@@ -62,6 +68,12 @@ resource "azurerm_network_security_group" "app" {
     destination_port_range     = "443"
     source_address_prefix      = "*"
     destination_address_prefix = "*"
+  }
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
   }
 }
 
