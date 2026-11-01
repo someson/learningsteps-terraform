@@ -44,3 +44,13 @@ variable "db_name" {
   type        = string
   default     = "learning_journal"
 }
+
+variable "admin_source_ip" {
+  description = "Public IPv4 address (or CIDR) allowed to reach SSH (22). Day 1 hardening: never \"*\"."
+  type        = string
+
+  validation {
+    condition     = can(cidrhost(strcontains(var.admin_source_ip, "/") ? var.admin_source_ip : "${var.admin_source_ip}/32", 0)) && !strcontains(var.admin_source_ip, ":")
+    error_message = "admin_source_ip must be an IPv4 address or IPv4 CIDR (e.g. 203.0.113.10 or 203.0.113.0/24). \"*\" and IPv6 are not allowed."
+  }
+}
