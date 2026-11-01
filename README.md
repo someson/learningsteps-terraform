@@ -1,18 +1,83 @@
-# LearningSteps — Base Deployment
+# LearningSteps — Hardened Azure Deployment
 
-A one-command Azure deployment of the [LearningSteps](https://github.com/CyberstepsDE/learningsteps) API and a PostgreSQL database.
+A Terraform deployment of the [LearningSteps](https://github.com/CyberstepsDE/learningsteps) API (FastAPI + PostgreSQL) on Azure. It started as an **intentionally insecure "Base Deployment"** and was hardened layer by layer over five days. Every change was verified on a live deployment.
 
-For the walkthrough built on top of this deployment, see [handbook.md](handbook.md).
+- Course walkthrough: [handbook.md](handbook.md)
+- Security documentation: [Security Hardening](#security-hardening) below and the [`security/`](security/) folder
+- Full command history with real output: [security/walkthrough-log.md](security/walkthrough-log.md)
 
-**Security hardening documentation:** see [Security Hardening](#security-hardening) below. All documents live in [`security/`](security/).
+## Project Summary
 
-> **This deployment is intentionally minimal and unsecured.** The VM is publicly reachable, the database accepts connections from any IP, credentials are stored in plaintext, and there is no traffic inspection or monitoring. It is a starting point — not a production setup.
+### Before → after
+
+```mermaid
+graph LR
+    subgraph Before["Baseline"]
+        I1((Internet)) -->|"22, 80 from *"| V1["VM<br/>static SSH key<br/>API anonymous, HTTP"]
+        I1 -->|"5432 from *"| D1[("PostgreSQL<br/>public, allow-all")]
+        V1 -->|"public internet"| D1
+    end
+    subgraph After["Hardened"]
+        I2((Internet)) -->|"443 TLS + HSTS<br/>80 → 301"| W["NPMplus + CrowdSec WAF"]
+        A["Admin"] -->|"22 from 1 IP<br/>Entra ID cert"| V2
+        W --> G["oauth2-proxy<br/>Entra ID login"] --> V2["FastAPI<br/>127.0.0.1"]
+        V2 -->|"private subnet"| D2[("PostgreSQL<br/>no public endpoint")]
+        W -. "logs" .-> S["Sentinel"] -. "auto-block" .-> N["NSG Deny rules"]
+    end
+```
+
+| Layer | Baseline | Hardened | Verified by |
+|---|---|---|---|
+| Management | SSH from `*`, static key | SSH from one IP; Entra ID login, ~1 h certificates, per-person audit | `nc` from Cloud Shell → timeout; `whoami` = Entra UPN |
+| Transport | HTTP in cleartext | Let's Encrypt TLS, Force HTTPS, HSTS 2 y | `http` → 301; `https` → HTTP/2 200, trusted cert |
+| Application input | no inspection | CrowdSec AppSec + OWASP CRS (in-band) | SQLi / XSS → 403; normal request → 200 |
+| Identity | anonymous read/write/delete | Entra ID (OIDC) via oauth2-proxy + NPMplus Auth Request | no login / fake token → 302; browser login → data |
+| Data | DB reachable from the internet | delegated subnet, private DNS, no public endpoint | `nc` to 5432 → name does not resolve |
+| Detection & response | none | Sentinel rule → incident → Logic App → NSG Deny | real scanner auto-blocked; controlled test blocked (`000`) |
+
+### Real-world events during the project
+
+- **A real attacker within minutes:** ~20 minutes after the HTTPS certificate was issued, a scanner (`45.45.237.39`) sent 24 LFI probes. The WAF blocked them, CrowdSec banned the IP, and Sentinel + the playbook added an NSG Deny rule. No human was involved.
+- **A controlled second attack** (Azure Cloud Shell) exposed a bug in the response chain, which was then fixed and re-verified.
+
+### Bugs found in the base deployment and fixed
+
+| # | Problem (found live) | Impact | Fix |
+|---|---|---|---|
+| [#2](https://github.com/someson/learningsteps-terraform/pull/2) | VM size `Standard_D2s_v3` not available (`SkuNotAvailable`) | deployment fails | `vm_size` variable, default `D2s_v6`, NVMe auto-detected |
+| [#5](https://github.com/someson/learningsteps-terraform/pull/5) | 12 bogus changes in every `terraform plan` | real drift invisible | ignore only Azure's `created-on` tag; template matches Azure's stored form |
+| [#9](https://github.com/someson/learningsteps-terraform/pull/9) | inline NSG rules → `apply` deletes Sentinel's block rules | known attacker re-admitted | standalone `azurerm_network_security_rule` + import |
+| [#11](https://github.com/someson/learningsteps-terraform/pull/11) | playbook always uses priority 100 → `SecurityRuleConflict` | **only one attacker can ever be blocked** | next free priority, sequential loop |
+| [#12](https://github.com/someson/learningsteps-terraform/pull/12) | Azure-added `Microsoft.Storage` endpoint on the DB subnet | `apply` would remove it (backups) | declared in code |
+| [#6](https://github.com/someson/learningsteps-terraform/pull/6) | `az ssh config` writes a private key into the repo folder | key could be committed | `.gitignore` |
+
+Found and fixed **manually on the VM** (not yet in the setup scripts): oauth2-proxy env file was world-readable (`chmod 600`); missing `email` claim → HTTP 500 at login (`preferred_username`); redirect whitelist; dpkg lock race in `setup-npmplus.sh` (re-run after cloud-init).
+
+### Findings status (F-01 … F-17)
+
+- ✅ **Mitigated (7):** F-01, F-03, F-04, F-05, F-06, F-07, F-14
+- 🟡 **Partially (4):** F-02, F-08, F-11, F-16
+- ⏳ **Open (6):** F-09, F-10, F-12, F-13, F-15, F-17
+
+Details are in the [Findings tracker](#findings-tracker).
+
+### What is still open (next steps)
+
+1. **Secrets** (F-09, F-10): the DB admin password is in plaintext in the systemd unit (world-readable), in `custom_data` and in Terraform state, and the app uses the admin account. → dedicated least-privilege DB role; **Key Vault** + managed identity, or **Entra ID auth for PostgreSQL** (no password at all).
+2. **Authorization** (F-17): any user of the tenant can sign in, and every user can `DELETE` all entries. → "Assignment required" + group; per-action authorization in the app.
+3. **Detection blind spot:** unauthenticated attacks get `302` before the WAF sees them, so the 403-based rule cannot fire. → alert on `302` bursts, run AppSec before `auth_request`, or ship CrowdSec alerts to Sentinel.
+4. **Manual state:** TLS, WAF, oauth2-proxy and the Entra ID app are configured by hand. → codify (`azuread` provider, setup scripts) or use managed services: Application Gateway / Front Door WAF, App Service authentication.
+5. **Supply chain & state** (F-13, F-15): pin `crowdsec:latest`, patch management for the VM (security updates pending at boot), remote Terraform state with RBAC.
+6. **Response hygiene:** block rules never expire, and the incidents are still "New". → TTL, allow-list, analyst triage.
 
 ## What Gets Deployed
 
-- **Ubuntu VM** (Standard_D2s_v6 by default, configurable via `vm_size`) running the FastAPI application on port 8000
-- **Azure PostgreSQL Flexible Server** (B1ms) as the database
-- A virtual network with one subnet and a basic network security group
+- **Ubuntu VM** (Standard_D2s_v6 by default, configurable via `vm_size`) in `snet-app`, running the FastAPI app (localhost only), NPMplus (reverse proxy + Let's Encrypt), CrowdSec (WAF) and oauth2-proxy
+- **Azure PostgreSQL Flexible Server** (B1ms) injected into the delegated subnet `snet-db`, with a private DNS zone and **no public endpoint**
+- **NSG** with standalone rules: SSH only from `admin_source_ip`, HTTP/HTTPS from anywhere. Priorities 100–999 are reserved for Sentinel auto-block rules
+- **Log Analytics + Microsoft Sentinel**: syslog via Azure Monitor Agent, a WAF-attack analytics rule, and a Logic App playbook that blocks attacker IPs in the NSG
+
+> TLS, the WAF bouncer, the Entra ID app registration and oauth2-proxy are configured as described in the per-day documents. They are not created by `terraform apply`.
 
 ## Security Hardening
 
@@ -24,7 +89,7 @@ was changed, how, and how the fix was verified.
 
 | # | Document | Status |
 |---|---|---|
-| — | [Walkthrough log](security/walkthrough-log.md): every command run, problems hit and how they were fixed | 🔄 ongoing |
+| — | [Walkthrough log](security/walkthrough-log.md): every command run, problems hit and how they were fixed | ✅ complete |
 | 00 | [Baseline security assessment](security/00-baseline-assessment.md): threat model, findings F-01…F-17, roadmap | ✅ done |
 | 01 | [Day 1: Management access](security/01-management-access.md) (Entra ID SSH, SSH restricted to a trusted IP) | ✅ done, verified |
 | 02 | [Day 2: TLS + Web Application Firewall](security/02-tls-waf.md) (NPMplus, Let's Encrypt, CrowdSec/CRS) | ✅ done, verified |
@@ -51,7 +116,7 @@ was changed, how, and how the fix was verified.
 | F-05 | API without authentication | Critical | Day 3 (authentication; no per-action authorization yet) |
 | F-06 | No TLS | High | Day 2 |
 | F-07 | No WAF | High | Day 2 |
-| F-08 | API bound to 0.0.0.0 at boot | Medium | |
+| F-08 | API bound to 0.0.0.0 at boot | Medium | Partially (rebound to 127.0.0.1 by `setup-npmplus.sh`; port 8000 never opened in the NSG) |
 | F-09 | DB password in plaintext (state, custom_data, unit file) | High | |
 | F-10 | App uses DB admin account | Medium | |
 | F-11 | Default NPMplus admin credentials | High | Day 2 (password changed; default still in script) |
