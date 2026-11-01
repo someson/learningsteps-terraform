@@ -50,13 +50,38 @@ az network nsg rule show -g rg-<prefix> --nsg-name nsg-app -n allow-ssh \
 ssh -o ConnectTimeout=5 azureuser@<vm-ip>
 ```
 
-| Check | Before | After |
+| Check | Before (baseline code) | After (verified 2026-11-01) |
 |---|---|---|
-| `allow-ssh` source | `*` | `<my-ip>/32` |
-| SSH from another IP | login prompt | timeout |
-| `az ssh vm` | `AuthorizationFailed` | shell as my Entra user |
+| `allow-ssh` source | `*` | `91.38.119.x` (single IP) |
+| Port 22 from the trusted IP (Mac) | open | `succeeded` |
+| Port 22 from another IP (Azure Cloud Shell) | open | `BLOCKED (timeout)` |
+| `az ssh vm` | `AuthorizationFailed` (no role) | shell as the Entra ID user |
+| `whoami` on the VM | `azureuser` (shared key) | `volodymyr.anatolijovickharkov@cybersteps.onmicrosoft.com` |
+| Role assignment | none | `Virtual Machine Administrator Login`, scope = `vm-ls-vladi` only, managed by Terraform (`azurerm_role_assignment.vm_admin_login`) |
 
-<!-- TODO: paste real command output / screenshots here -->
+Evidence (full output in [walkthrough-log.md](walkthrough-log.md), Step 4):
+```text
+❯ az network nsg rule show -g rg-ls-vladi --nsg-name nsg-app -n allow-ssh \
+    --query "{source:sourceAddressPrefix, port:destinationPortRange}" -o table
+Source         Port
+-------------  ------
+91.38.119.x    22
+
+❯ nc -vz -w 5 20.101.139.95 22                      # trusted IP (Mac)
+Connection to 20.101.139.95 port 22 [tcp/ssh] succeeded!
+
+volodymyr [ ~ ]$ timeout 10 bash -c "</dev/tcp/20.101.139.95/22" && echo OPEN || echo "BLOCKED (timeout)"   # Azure Cloud Shell
+BLOCKED (timeout)
+
+volodymyr.anatolijovickharkov@cybersteps.onmicrosoft.com@vm-ls-vladi:~$ whoami
+volodymyr.anatolijovickharkov@cybersteps.onmicrosoft.com
+```
+
+Note: in this deployment the Day 1 change was applied **by `deploy.py` during
+the deployment itself**, not as a separate step. The Day 1 code was already
+merged when the second deployment attempt ran. The "before" state is
+therefore taken from the baseline code (`source_address_prefix = "*"`). The
+first, failed deployment attempt had created the NSG with that value.
 
 ## Residual risk
 

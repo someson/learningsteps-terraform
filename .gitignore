@@ -15,3 +15,7 @@ terraform.tfstate.*.backup
 *.sql
 .playwright-mcp/
 docs/
+
+# az ssh config output: contains a private key + short-lived Entra ID certificate
+azssh_config
+az_ssh_config/
