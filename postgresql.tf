@@ -9,10 +9,15 @@ resource "azurerm_postgresql_flexible_server" "main" {
   storage_mb             = 32768
   zone                   = "1"
 
-  # Public by design at baseline — Day 4 migrates this to Private Link
-  # live. Do not add public_network_access_enabled/delegated_subnet_id/
-  # private_dns_zone_id here; that migration is the whole point of the
-  # exercise. See handbook.md Day 4.
+  # Day 4 (F-03, F-04): no public endpoint. The server is injected into
+  # snet-db and is reachable only from inside the VNet. Changing these
+  # attributes REPLACES the server (data loss), so back it up first; see
+  # security/04-data-isolation.md.
+  public_network_access_enabled = false
+  delegated_subnet_id           = azurerm_subnet.db.id
+  private_dns_zone_id           = azurerm_private_dns_zone.postgres.id
+
+  depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
 
   # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
   # this code. Ignore only that key; all other tags are still compared.
@@ -21,12 +26,8 @@ resource "azurerm_postgresql_flexible_server" "main" {
   }
 }
 
-resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_all" {
-  name             = "allow-all"
-  server_id        = azurerm_postgresql_flexible_server.main.id
-  start_ip_address = "0.0.0.0"
-  end_ip_address   = "255.255.255.255"
-}
+# Day 4: the "allow-all" firewall rule (0.0.0.0–255.255.255.255) is removed.
+# Firewall rules do not apply to a VNet-integrated server anyway.
 
 resource "azurerm_postgresql_flexible_server_database" "app" {
   name      = var.db_name

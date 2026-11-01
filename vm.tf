@@ -98,10 +98,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
   # own retry loop eventually connects and creates the table, but
   # deploy.py's separate seeding step (running moments later) can still
   # lose that race and find the table gone.
-  depends_on = [
-    azurerm_postgresql_flexible_server.main,
-    azurerm_postgresql_flexible_server_firewall_rule.allow_all,
-  ]
+  depends_on = [azurerm_postgresql_flexible_server.main]
 
   # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
   # this code. Ignore only that key; all other tags are still compared.
