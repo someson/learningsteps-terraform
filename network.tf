@@ -108,6 +108,12 @@ resource "azurerm_subnet" "db" {
   virtual_network_name = azurerm_virtual_network.main.name
   address_prefixes     = ["10.0.2.0/24"]
 
+  # Azure adds this service endpoint by itself when a Flexible Server is
+  # injected into the subnet (the server reaches Azure Storage for WAL and
+  # backups through it). Declared here so Terraform does not try to remove
+  # it on every apply (found in a later plan).
+  service_endpoints = ["Microsoft.Storage"]
+
   delegation {
     name = "postgresql"
     service_delegation {
