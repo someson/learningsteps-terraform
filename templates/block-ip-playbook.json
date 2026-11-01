@@ -98,11 +98,48 @@
             },
             "For_each_IP": {
               "runAfter": {
-                "Entities_Get_IPs": ["Succeeded"]
+                "Entities_Get_IPs": [
+                  "Succeeded"
+                ]
               },
               "type": "Foreach",
               "foreach": "@body('Entities_Get_IPs')?['IPs']",
               "actions": {
+                "Get_NSG": {
+                  "runAfter": {},
+                  "type": "Http",
+                  "inputs": {
+                    "method": "GET",
+                    "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('SubscriptionId'), '/resourceGroups/', parameters('ResourceGroupName'), '/providers/Microsoft.Network/networkSecurityGroups/', parameters('NsgName'), '?api-version=2023-09-01')}",
+                    "authentication": {
+                      "type": "ManagedServiceIdentity"
+                    }
+                  }
+                },
+                "Filter_other_block_rules": {
+                  "runAfter": {
+                    "Get_NSG": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_NSG')?['properties']?['securityRules']",
+                    "where": "@and(startsWith(item()?['name'], 'sentinel-block-'), not(equals(item()?['name'], concat('sentinel-block-', replace(items('For_each_IP')?['Address'], '.', '-')))))"
+                  }
+                },
+                "Select_priorities": {
+                  "runAfter": {
+                    "Filter_other_block_rules": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Select",
+                  "inputs": {
+                    "from": "@body('Filter_other_block_rules')",
+                    "select": "@item()?['properties']?['priority']"
+                  }
+                },
                 "Block_IP_in_NSG": {
                   "type": "Http",
                   "inputs": {
@@ -113,7 +150,7 @@
                     },
                     "body": {
                       "properties": {
-                        "priority": 100,
+                        "priority": "@add(max(union(createArray(99), body('Select_priorities'))), 1)",
                         "protocol": "*",
                         "access": "Deny",
                         "direction": "Inbound",
@@ -127,7 +164,17 @@
                     "authentication": {
                       "type": "ManagedServiceIdentity"
                     }
+                  },
+                  "runAfter": {
+                    "Select_priorities": [
+                      "Succeeded"
+                    ]
                   }
+                }
+              },
+              "runtimeConfiguration": {
+                "concurrency": {
+                  "repetitions": 1
                 }
               }
             }
