@@ -10,6 +10,12 @@ variable "location" {
   default     = "westeurope"
 }
 
+variable "vm_size" {
+  description = "VM size. Standard_D2s_v3 often hits SkuNotAvailable (capacity) in westeurope; v6 sizes use the NVMe disk controller automatically (see vm.tf)."
+  type        = string
+  default     = "Standard_D2s_v6"
+}
+
 variable "vm_admin_username" {
   description = "Admin username for the VM"
   type        = string
