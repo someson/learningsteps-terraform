@@ -8,9 +8,10 @@ was changed, how, and how the fix was verified.
 
 | # | Document | Status |
 |---|---|---|
+| — | [Walkthrough log](walkthrough-log.md): every command run, problems hit and how they were fixed | 🔄 ongoing |
 | 00 | [Baseline security assessment](00-baseline-assessment.md): threat model, findings F-01…F-17, roadmap | ✅ done |
-| 01 | [Day 1: Management access](01-management-access.md) (Entra ID SSH, SSH restricted to a trusted IP) | ✅ code, ⏳ verification |
-| 02 | Day 2: TLS + Web Application Firewall (NPMplus, Let's Encrypt, CrowdSec/CRS) | ⏳ |
+| 01 | [Day 1: Management access](01-management-access.md) (Entra ID SSH, SSH restricted to a trusted IP) | ✅ done, verified |
+| 02 | [Day 2: TLS + Web Application Firewall](02-tls-waf.md) (NPMplus, Let's Encrypt, CrowdSec/CRS) | ✅ done, verified |
 | 03 | Day 3: Identity-based API access (Entra ID + oauth2-proxy) | ⏳ |
 | 04 | Day 4: Data isolation (PostgreSQL VNet integration, private DNS) | ⏳ |
 | 05 | Day 5: Detection and response (Sentinel + auto-block playbook) | ⏳ |
@@ -32,12 +33,12 @@ was changed, how, and how the fix was verified.
 | F-03 | Public DB, firewall allows all IPs | Critical | |
 | F-04 | VM→DB over the public internet | High | |
 | F-05 | API without authentication | Critical | |
-| F-06 | No TLS | High | |
-| F-07 | No WAF | High | |
+| F-06 | No TLS | High | Day 2 |
+| F-07 | No WAF | High | Day 2 |
 | F-08 | API bound to 0.0.0.0 at boot | Medium | |
 | F-09 | DB password in plaintext (state, custom_data, unit file) | High | |
 | F-10 | App uses DB admin account | Medium | |
-| F-11 | Default NPMplus admin credentials | High | |
+| F-11 | Default NPMplus admin credentials | High | Day 2 (password changed; default still in script) |
 | F-12 | SSH host key verification disabled in deploy.py | Low | |
 | F-13 | Unpinned images / dependencies | Low–Medium | |
 | F-14 | No detection / response | Medium | |
