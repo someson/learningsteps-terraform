@@ -7,3 +7,4 @@ vm_admin_ssh_key  = "ssh-rsa AAAA..."  # paste your public key here
 db_admin_username = "psqladmin"
 db_admin_password = "ChangeMe123!"     # use a strong password
 db_name           = "learning_journal"
+admin_source_ip   = "203.0.113.10"     # your public IPv4: curl -s -4 ifconfig.me

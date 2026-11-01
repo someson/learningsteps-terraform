@@ -100,3 +100,13 @@ resource "azurerm_virtual_machine_extension" "aad_ssh" {
   type_handler_version       = "1.0"
   auto_upgrade_minor_version = true
 }
+
+# Day 1 (F-02): allow the identity running Terraform to log in to the VM's OS
+# with Entra ID (az ssh vm). Being Owner/Contributor on the subscription does
+# NOT grant OS login — Azure separates control-plane rights from VM login.
+# Scoped to this single VM (least privilege), not the subscription.
+resource "azurerm_role_assignment" "vm_admin_login" {
+  scope                = azurerm_linux_virtual_machine.vm.id
+  role_definition_name = "Virtual Machine Administrator Login"
+  principal_id         = data.azurerm_client_config.current.object_id
+}

@@ -14,6 +14,7 @@ import argparse
 import getpass
 import json
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -220,6 +221,31 @@ def _validate_db_password(pw):
         return f"must not contain {' '.join(set(bad))} (breaks the database connection URL)"
     return None
 
+def detect_public_ipv4():
+    """Day 1: the NSG only allows SSH from this IP. Force IPv4 — the VM's
+    public IP is IPv4-only, so an IPv6 source prefix would lock you out."""
+    for url in ("https://api.ipify.org", "https://ipv4.icanhazip.com"):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                ip = r.read().decode().strip()
+            if ip.count(".") == 3:
+                return ip
+        except Exception:
+            continue
+    return None
+
+def ensure_admin_source_ip(tfvars):
+    """Add admin_source_ip to an existing terraform.tfvars if it's missing."""
+    text = tfvars.read_text()
+    if re.search(r"^\s*admin_source_ip\s*=", text, re.M):
+        return
+    ip = detect_public_ipv4()
+    if not ip:
+        error("Could not detect your public IPv4. Add admin_source_ip = \"<your-ip>\" to terraform.tfvars")
+        sys.exit(1)
+    tfvars.write_text(text.rstrip("\n") + f'\nadmin_source_ip   = "{ip}"\n')
+    ok(f"SSH will be allowed only from {ip} (admin_source_ip)")
+
 def collect_config(public_key, args):
     info("Configuration")
 
@@ -228,6 +254,7 @@ def collect_config(public_key, args):
         reuse = input("  terraform.tfvars already exists. Reuse it? [Y/n]: ").strip().lower()
         if reuse in ("", "y", "yes"):
             ok("Reusing existing terraform.tfvars")
+            ensure_admin_source_ip(tfvars)
             return
     elif tfvars.exists() and args.password is not None:
         ok("Overwriting terraform.tfvars with provided flags")
@@ -268,6 +295,7 @@ def collect_config(public_key, args):
         f'db_admin_password = "{pw}"\n'
         f'db_name           = "learning_journal"\n'
     )
+    ensure_admin_source_ip(tfvars)
     ok(f"terraform.tfvars written  (prefix={prefix}, location={location})")
 
 # ── step 4 — deploy ───────────────────────────────────────────────────────────

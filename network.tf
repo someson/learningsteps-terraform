@@ -25,6 +25,9 @@ resource "azurerm_network_security_group" "app" {
   # silently a no-op — confirmed live (SSH and the app both remained
   # reachable from a "blocked" IP). Baseline allow rules now start at 1000
   # so the auto-block deny rule always evaluates first.
+  #
+  # Day 1 (F-01): SSH only from the operator's trusted IP (var.admin_source_ip),
+  # never from the whole internet.
   security_rule {
     name                       = "allow-ssh"
     priority                   = 1000
@@ -33,7 +36,7 @@ resource "azurerm_network_security_group" "app" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "22"
-    source_address_prefix      = "*"
+    source_address_prefix      = var.admin_source_ip
     destination_address_prefix = "*"
   }
 

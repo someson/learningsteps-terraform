@@ -9,7 +9,7 @@ was changed, how, and how the fix was verified.
 | # | Document | Status |
 |---|---|---|
 | 00 | [Baseline security assessment](00-baseline-assessment.md): threat model, findings F-01…F-17, roadmap | ✅ done |
-| 01 | Day 1: Management access (Entra ID SSH, SSH restricted to a trusted IP) | ⏳ |
+| 01 | [Day 1: Management access](01-management-access.md) (Entra ID SSH, SSH restricted to a trusted IP) | ✅ code, ⏳ verification |
 | 02 | Day 2: TLS + Web Application Firewall (NPMplus, Let's Encrypt, CrowdSec/CRS) | ⏳ |
 | 03 | Day 3: Identity-based API access (Entra ID + oauth2-proxy) | ⏳ |
 | 04 | Day 4: Data isolation (PostgreSQL VNet integration, private DNS) | ⏳ |
@@ -27,8 +27,8 @@ was changed, how, and how the fix was verified.
 
 | ID | Short name | Severity | Fixed in |
 |---|---|---|---|
-| F-01 | SSH open to the internet | High | |
-| F-02 | Static SSH key only | Medium | |
+| F-01 | SSH open to the internet | High | Day 1 |
+| F-02 | Static SSH key only | Medium | Day 1 (partially: key still exists) |
 | F-03 | Public DB, firewall allows all IPs | Critical | |
 | F-04 | VM→DB over the public internet | High | |
 | F-05 | API without authentication | Critical | |
