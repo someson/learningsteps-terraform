@@ -5,6 +5,12 @@ resource "azurerm_public_ip" "vm" {
   allocation_method   = "Static"
   sku                 = "Standard"
   domain_name_label   = lower(var.prefix)
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
+  }
 }
 
 resource "azurerm_network_interface" "vm" {
@@ -17,6 +23,12 @@ resource "azurerm_network_interface" "vm" {
     subnet_id                     = azurerm_subnet.app.id
     private_ip_address_allocation = "Dynamic"
     public_ip_address_id          = azurerm_public_ip.vm.id
+  }
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
   }
 }
 
@@ -90,6 +102,17 @@ resource "azurerm_linux_virtual_machine" "vm" {
     azurerm_postgresql_flexible_server.main,
     azurerm_postgresql_flexible_server_firewall_rule.allow_all,
   ]
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [
+      tags["created-on"],
+      # Azure enables this server-side; azurerm 3.x defaults it to false
+      # and would try to switch it off on every apply.
+      vm_agent_platform_updates_enabled,
+    ]
+  }
 }
 
 resource "azurerm_virtual_machine_extension" "aad_ssh" {
@@ -99,6 +122,12 @@ resource "azurerm_virtual_machine_extension" "aad_ssh" {
   type                       = "AADSSHLoginForLinux"
   type_handler_version       = "1.0"
   auto_upgrade_minor_version = true
+
+  # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
+  # this code. Ignore only that key; all other tags are still compared.
+  lifecycle {
+    ignore_changes = [tags["created-on"]]
+  }
 }
 
 # Day 1 (F-02): allow the identity running Terraform to log in to the VM's OS

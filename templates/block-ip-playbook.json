@@ -2,18 +2,18 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "PlaybookName": {
-      "type": "string"
+    "playbookName": {
+      "type": "String"
     },
-    "NsgName": {
-      "type": "string"
+    "nsgName": {
+      "type": "String"
     }
   },
   "variables": {
     "subscriptionId": "[subscription().subscriptionId]",
     "location": "[resourceGroup().location]",
     "resourceGroupName": "[resourceGroup().name]",
-    "sentinelConnectionName": "[concat('azuresentinel-', parameters('PlaybookName'))]"
+    "sentinelConnectionName": "[concat('azuresentinel-', parameters('playbookName'))]"
   },
   "resources": [
     {
@@ -34,7 +34,7 @@
     {
       "type": "Microsoft.Logic/workflows",
       "apiVersion": "2017-07-01",
-      "name": "[parameters('PlaybookName')]",
+      "name": "[parameters('playbookName')]",
       "location": "[variables('location')]",
       "dependsOn": [
         "[resourceId('Microsoft.Web/connections', variables('sentinelConnectionName'))]"
@@ -61,7 +61,7 @@
               "type": "String"
             },
             "NsgName": {
-              "defaultValue": "[parameters('NsgName')]",
+              "defaultValue": "[parameters('nsgName')]",
               "type": "String"
             }
           },
@@ -154,12 +154,12 @@
   ],
   "outputs": {
     "PlaybookResourceId": {
-      "type": "string",
-      "value": "[resourceId('Microsoft.Logic/workflows', parameters('PlaybookName'))]"
+      "type": "String",
+      "value": "[resourceId('Microsoft.Logic/workflows', parameters('playbookName'))]"
     },
     "PlaybookPrincipalId": {
-      "type": "string",
-      "value": "[reference(resourceId('Microsoft.Logic/workflows', parameters('PlaybookName')), '2017-07-01', 'Full').identity.principalId]"
+      "type": "String",
+      "value": "[reference(resourceId('Microsoft.Logic/workflows', parameters('playbookName')), '2017-07-01', 'Full').identity.principalId]"
     }
   }
 }
