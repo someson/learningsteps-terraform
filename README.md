@@ -4,11 +4,13 @@ A one-command Azure deployment of the [LearningSteps](https://github.com/Cyberst
 
 For the walkthrough built on top of this deployment, see [handbook.md](handbook.md).
 
+**Security hardening documentation:** see [security/](security/README.md). Start with the [baseline security assessment](security/00-baseline-assessment.md).
+
 > **This deployment is intentionally minimal and unsecured.** The VM is publicly reachable, the database accepts connections from any IP, credentials are stored in plaintext, and there is no traffic inspection or monitoring. It is a starting point — not a production setup.
 
 ## What Gets Deployed
 
-- **Ubuntu VM** (Standard_D2s_v3) running the FastAPI application on port 8000
+- **Ubuntu VM** (Standard_D2s_v6 by default, configurable via `vm_size`) running the FastAPI application on port 8000
 - **Azure PostgreSQL Flexible Server** (B1ms) as the database
 - A virtual network with one subnet and a basic network security group
 
@@ -108,6 +110,15 @@ terraform destroy
   ```
   Avoiding it entirely: use a different prefix, or wait a few minutes after
   destroy before reusing the same one.
+
+- **`SkuNotAvailable` for the VM size** — Azure has no capacity for that
+  size in the region right now. Pick another 2-vCPU size that is available:
+  ```bash
+  az vm list-skus --location westeurope --resource-type virtualMachines \
+    --query "[?contains(name,'_D2') && restrictions==\`[]\`].name" -o tsv | sort -u
+  ```
+  and set it in `terraform.tfvars`, e.g. `vm_size = "Standard_D2as_v5"`.
+  `*_v6` sizes automatically get `disk_controller_type = "NVMe"` (`vm.tf`).
 
 ## SSH Access
 

@@ -1,5 +1,6 @@
 prefix            = "learningsteps"
 location          = "westeurope"
+vm_size           = "Standard_D2s_v6"
 vm_admin_username = "azureuser"
 vm_admin_ssh_key  = "ssh-rsa AAAA..."  # paste your public key here
 

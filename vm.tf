@@ -24,8 +24,11 @@ resource "azurerm_linux_virtual_machine" "vm" {
   name                = "vm-${var.prefix}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
-  size                = "Standard_D2s_v3"
-  admin_username      = var.vm_admin_username
+  size                = var.vm_size
+  # v6 sizes (Dsv6, Dasv6, ...) attach disks over NVMe only; older sizes use
+  # SCSI. Derived from the size so switching sizes needs no second edit.
+  disk_controller_type = can(regex("_v6$", var.vm_size)) ? "NVMe" : "SCSI"
+  admin_username       = var.vm_admin_username
   network_interface_ids = [
     azurerm_network_interface.vm.id
   ]
