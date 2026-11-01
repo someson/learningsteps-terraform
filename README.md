@@ -30,7 +30,7 @@ was changed, how, and how the fix was verified.
 | 02 | [Day 2: TLS + Web Application Firewall](security/02-tls-waf.md) (NPMplus, Let's Encrypt, CrowdSec/CRS) | ✅ done, verified |
 | 03 | [Day 3: Identity-based API access](security/03-identity-api-access.md) (Entra ID + oauth2-proxy) | ✅ done, verified |
 | 04 | [Day 4: Data isolation](security/04-data-isolation.md) (PostgreSQL VNet integration, private DNS) | ✅ done, verified |
-| 05 | Day 5: Detection and response (Sentinel + auto-block playbook) | ⏳ |
+| 05 | [Day 5: Detection and response](security/05-detection-response.md) (Sentinel + auto-block playbook) | ✅ done, verified |
 
 ### Structure of each day's document
 
@@ -57,7 +57,7 @@ was changed, how, and how the fix was verified.
 | F-11 | Default NPMplus admin credentials | High | Day 2 (password changed; default still in script) |
 | F-12 | SSH host key verification disabled in deploy.py | Low | |
 | F-13 | Unpinned images / dependencies | Low–Medium | |
-| F-14 | No detection / response | Medium | |
+| F-14 | No detection / response | Medium | Day 5 (403-based; blind spot behind the identity gate) |
 | F-15 | Local unencrypted Terraform state | Medium | |
 | F-16 | Flat network, VM with public IP | Medium | Day 4 (partially: DB subnet; VM still public) |
 | F-17 | oauth2-proxy allows any tenant user | Low–Medium | |
