@@ -18,63 +18,79 @@ resource "azurerm_subnet" "app" {
   address_prefixes     = ["10.0.1.0/24"]
 }
 
+# The NSG itself carries NO inline rules. Each rule is a separate
+# azurerm_network_security_rule resource below.
+#
+# Why (found live on Day 4): with inline `security_rule` blocks Terraform owns
+# the NSG's *entire* rule set, so every `terraform apply` silently deleted the
+# "sentinel-block-<ip>" deny rules that the Sentinel auto-block playbook adds
+# at runtime (templates/block-ip-playbook.json), i.e. Terraform would have
+# un-blocked a real attacker. With standalone rule resources Terraform manages
+# only its own rules and leaves the playbook's rules alone, while drift on
+# OUR rules (e.g. SSH reopened to "*") is still detected.
 resource "azurerm_network_security_group" "app" {
   name                = "nsg-app"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
-
-  # Priorities 100-199 are reserved for Sentinel's auto-block playbook
-  # (templates/block-ip-playbook.json creates "sentinel-block-<ip>" deny
-  # rules at priority 100). Found by testing: with the allow-* rules
-  # originally at 100/110/120 and the deny rule at 200, the lower-numbered
-  # (higher-precedence) allow-* rules always won and the auto-block was
-  # silently a no-op — confirmed live (SSH and the app both remained
-  # reachable from a "blocked" IP). Baseline allow rules now start at 1000
-  # so the auto-block deny rule always evaluates first.
-  #
-  # Day 1 (F-01): SSH only from the operator's trusted IP (var.admin_source_ip),
-  # never from the whole internet.
-  security_rule {
-    name                       = "allow-ssh"
-    priority                   = 1000
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = var.admin_source_ip
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "allow-http"
-    priority                   = 1010
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "80"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "allow-https"
-    priority                   = 1020
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "443"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
 
   # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
   # this code. Ignore only that key; all other tags are still compared.
   lifecycle {
     ignore_changes = [tags["created-on"]]
   }
+}
+
+# Priorities 100-199 are reserved for Sentinel's auto-block playbook
+# (templates/block-ip-playbook.json creates "sentinel-block-<ip>" deny
+# rules at priority 100). Found by testing: with the allow-* rules
+# originally at 100/110/120 and the deny rule at 200, the lower-numbered
+# (higher-precedence) allow-* rules always won and the auto-block was
+# silently a no-op — confirmed live (SSH and the app both remained
+# reachable from a "blocked" IP). Baseline allow rules now start at 1000
+# so the auto-block deny rule always evaluates first.
+
+# Day 1 (F-01): SSH only from the operator's trusted IP (var.admin_source_ip),
+# never from the whole internet.
+resource "azurerm_network_security_rule" "allow_ssh" {
+  name                        = "allow-ssh"
+  priority                    = 1000
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "22"
+  source_address_prefix       = var.admin_source_ip
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.main.name
+  network_security_group_name = azurerm_network_security_group.app.name
+}
+
+resource "azurerm_network_security_rule" "allow_http" {
+  name                        = "allow-http"
+  priority                    = 1010
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "80"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.main.name
+  network_security_group_name = azurerm_network_security_group.app.name
+}
+
+resource "azurerm_network_security_rule" "allow_https" {
+  name                        = "allow-https"
+  priority                    = 1020
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "443"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.main.name
+  network_security_group_name = azurerm_network_security_group.app.name
 }
 
 resource "azurerm_subnet_network_security_group_association" "app" {
