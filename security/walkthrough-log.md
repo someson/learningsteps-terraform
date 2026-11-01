@@ -630,3 +630,227 @@ config, or use `cscli console disable --all` for the console options.
 (Let's Encrypt, Force HTTPS, HSTS); SQLi/XSS blocked with `403`; legitimate
 traffic still `200`; a real external LFI scanner detected and banned
 automatically.
+
+---
+
+## Step 6 — Day 3: Identity-based API access ✅
+
+Goal: no request reaches the API without a valid Entra ID identity
+(oauth2-proxy behind NPMplus *Auth Request*). Addresses **F-05**.
+
+### 6.1 Register an Entra ID application (on the Mac)
+The app registration is named per student (`…-ls-vladi`), because the course
+tenant is shared and display names would otherwise collide.
+```text
+❯ APP_ID=$(az ad app create --display-name learningsteps-oauth2-proxy-ls-vladi \
+    --sign-in-audience AzureADMyOrg --query appId -o tsv); echo $APP_ID
+45adf4cc-1808-45f6-8550-0ffe92680e12
+```
+`AzureADMyOrg`: single-tenant, so only accounts from the course tenant can
+sign in. The app (client) ID is an identifier, not a secret.
+```bash
+az ad app update --id $APP_ID --identifier-uris api://$APP_ID     # OK, no output
+```
+```text
+❯ az ad sp create --id $APP_ID --query id -o tsv
+ae215f48-db74-440e-af81-74dccd0e528e
+```
+`az ad app create` creates only the *application object* (the global
+definition). The **service principal** is its instance in this tenant.
+Without it the app cannot act as a sign-in or token audience
+(`az ad sp show --id $APP_ID` returns 404).
+```text
+❯ SECRET=$(az ad app credential reset --id $APP_ID --query password -o tsv)
+WARNING: The output includes credentials that you must protect. ...
+```
+The client secret is captured into a shell variable and **never printed**
+(not recorded here). Default lifetime is 1 year. A shorter `--end-date`,
+or a certificate / federated credential instead of a secret, would be
+better in production.
+```text
+❯ TENANT_ID=$(az account show --query tenantId -o tsv); echo $TENANT_ID
+c0531484-50fa-4ff2-97df-b1f2d4810603
+```
+```text
+❯ OBJECT_ID=$(az ad app show --id $APP_ID --query id -o tsv); echo $OBJECT_ID
+e17e53e2-28dc-4e2f-98e4-b2386bb9dc16
+```
+```bash
+az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+  --body '{"api":{"requestedAccessTokenVersion":2}}'          # OK
+```
+Forces **v2.0 access tokens**. Without it, tokens for `api://$APP_ID` are
+v1.0 (`iss: https://sts.windows.net/<tenant>/`), and oauth2-proxy, which is
+configured with the v2.0 issuer, rejects them.
+```bash
+az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+  --body "{\"api\":{\"oauth2PermissionScopes\":[{\"id\":\"$(uuidgen)\", ... ,\"value\":\"access_as_user\"}]}}"   # OK
+```
+Exposes the scope `access_as_user`. Without any exposed scope, requesting a
+token for `api://$APP_ID` fails with `AADSTS650057: Invalid resource`.
+(`uuidgen` on macOS replaces the handbook's `python3 -c "import uuid…"`.)
+Verification of the app registration:
+```text
+❯ az ad app show --id $APP_ID --query "{tokenVersion:api.requestedAccessTokenVersion, scopes:api.oauth2PermissionScopes[].value, identifierUris:identifierUris}" -o json
+{
+  "identifierUris": [ "api://45adf4cc-1808-45f6-8550-0ffe92680e12" ],
+  "scopes": [ "access_as_user" ],
+  "tokenVersion": 2
+}
+```
+```bash
+az ad app update --id $APP_ID \
+  --web-redirect-uris "https://ls-vladi.westeurope.cloudapp.azure.com/oauth2/callback"   # OK
+```
+The reply URL must be HTTPS (Entra rejects plain-HTTP reply URLs except
+`localhost`), which is why Day 3 depends on Day 2's TLS. Without it the
+browser login fails with `AADSTS500113: No reply address is registered`.
+
+### 6.2 Configure oauth2-proxy on the VM
+Values are pushed **from the Mac's shell variables** over SSH (heredoc piped
+into `sudo bash -s`). The client secret is never typed, printed or stored in
+shell history. The env file is also restricted to root (`chmod 600`):
+`setup-oauth2-proxy.sh` creates it with the default umask, which makes it
+**world-readable** for every local user on the VM (new finding, same class
+as F-09).
+
+**Problem:** the first attempt failed:
+```text
+volodymyr.anatolijovickharkov@cybersteps.onmicrosoft.com@20.101.139.95: Permission denied (publickey).
+```
+**Cause:** the Entra ID SSH certificate from `az ssh config` (Step 5.1) had
+expired. It is valid for about 1 hour by design.
+**Fix:** re-run `az ssh config …` to get a fresh certificate. This is the
+security property working as intended: a leaked certificate expires on its own.
+```text
+❯ az ssh config --resource-group rg-ls-vladi --name vm-ls-vladi --file azssh_config --overwrite
+.../id_rsa already exists.
+Overwrite (y/n)? y
+Generated SSH certificate .../id_rsa.pub-aadcert.pub is valid until 2026-11-01 09:47:02 PM in local time.
+
+❯ ssh -F azssh_config 20.101.139.95 "sudo bash -s" <<EOF
+set -e
+sed -i -e "s#^OAUTH2_PROXY_CLIENT_ID=.*#OAUTH2_PROXY_CLIENT_ID=$APP_ID#" \
+       -e "s#^OAUTH2_PROXY_CLIENT_SECRET=.*#OAUTH2_PROXY_CLIENT_SECRET=$SECRET#" \
+       -e "s#^OAUTH2_PROXY_OIDC_ISSUER_URL=.*#OAUTH2_PROXY_OIDC_ISSUER_URL=https://login.microsoftonline.com/$TENANT_ID/v2.0#" \
+       -e "s#^OAUTH2_PROXY_OIDC_EXTRA_AUDIENCES=.*#OAUTH2_PROXY_OIDC_EXTRA_AUDIENCES=api://$APP_ID#" \
+       /etc/oauth2-proxy/oauth2-proxy.env
+chmod 600 /etc/oauth2-proxy/oauth2-proxy.env
+sed -i "s#REPLACE_WITH_DOMAIN#ls-vladi.westeurope.cloudapp.azure.com#" /etc/systemd/system/oauth2-proxy.service
+echo configured
+EOF
+configured
+```
+
+### 6.3 Start oauth2-proxy
+```text
+❯ ssh -F azssh_config 20.101.139.95 "sudo systemctl daemon-reload && sudo systemctl enable --now oauth2-proxy && systemctl is-active oauth2-proxy"
+Created symlink /etc/systemd/system/multi-user.target.wants/oauth2-proxy.service → /etc/systemd/system/oauth2-proxy.service.
+active
+```
+oauth2-proxy listens on `127.0.0.1:4180` only and is not exposed. NPMplus
+reaches it through `AUTH_REQUEST_OAUTH2PROXY_UPSTREAM`.
+
+### 6.4 Wire identity enforcement into NPMplus (Auth Request)
+**Problem:** saving the proxy host with *Auth Request → oauth2proxy* in the
+NPMplus GUI returned **HTTP 403** (logout in the admin GUI also failed).
+**Cause:** the Day 2 WAF protects the whole NPMplus instance, including its
+own admin API. Admin requests through the SSH tunnel arrive from `127.0.0.1`,
+and the CRS flags the proxy-host update payload (nginx/auth config in the
+JSON body) as an attack. This is the known issue in `handbook.md`, Day 2
+troubleshooting: the defense blocks its own operator.
+**Fix (as in the handbook):** temporarily disable the bouncer, make the admin
+change, then re-enable it.
+```bash
+# on the VM
+sudo sed -i 's/^ENABLED=.*/ENABLED=false/' /opt/npmplus/crowdsec/crowdsec.conf && cd /opt/npmplus && sudo docker compose restart npmplus
+```
+Then, in the GUI: *Proxy Host → Edit → Auth Request → oauth2proxy → Save*.
+Saved successfully.
+```bash
+# re-enable the WAF immediately afterwards
+sudo sed -i 's/^ENABLED=.*/ENABLED=true/' /opt/npmplus/crowdsec/crowdsec.conf && cd /opt/npmplus && sudo docker compose restart npmplus
+```
+The WAF was off only for the few minutes of the admin change. A better
+long-term fix is to exempt the admin interface (port 81, source `127.0.0.1`)
+from AppSec inspection, so that admin work never needs the public WAF
+switched off.
+
+### 6.5 Verification: the identity gate
+Unauthenticated request:
+```text
+❯ curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" https://ls-vladi.westeurope.cloudapp.azure.com/entries
+302 https://ls-vladi.westeurope.cloudapp.azure.com/oauth2/sign_in?rd=https://ls-vladi.westeurope.cloudapp.azure.com/entries
+```
+Before Day 3 the same request returned `200` with all journal entries. Now
+the data is not returned. The client is redirected to the oauth2-proxy
+sign-in, and `rd=` remembers the original URL. **F-05 mitigated.**
+Malformed bearer token:
+```text
+❯ curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer garbage" https://ls-vladi.westeurope.cloudapp.azure.com/entries
+302
+```
+An invalid token gets no free pass and is treated as unauthenticated.
+
+### 6.6 Browser login: HTTP 500 at `/oauth2/callback`
+The Microsoft sign-in itself succeeded: the browser came back to
+`/oauth2/callback?code=…`. oauth2-proxy then answered **500 Internal Server
+Error**. Root cause from the log:
+```text
+❯ ssh -F azssh_config 20.101.139.95 "sudo journalctl -u oauth2-proxy --since '30 min ago' --no-pager | grep -iE 'callback|error|500' | tail -10"
+[oauthproxy.go:902] Error creating session during OAuth2 callback: neither the id_token nor the profileURL set an email
+[validator.go:60] Rejecting invalid redirect "https://ls-vladi.westeurope.cloudapp.azure.com/...": domain / port not in whitelist
+"GET /oauth2/callback?code=<redacted>&state=<redacted>&session_state=<redacted>" ... 500
+```
+1. **No `email` claim.** oauth2-proxy identifies users by e-mail by
+   default, but the cloud-only account `…@cybersteps.onmicrosoft.com` has no
+   `mail` attribute in Entra ID, so the token has no `email` claim. The
+   identity is in `preferred_username` (the UPN).
+2. **Redirects to our own domain rejected.** Without `--whitelist-domain`,
+   oauth2-proxy refuses absolute post-login redirects (`rd=`), even to its
+   own host.
+
+**Fix:**
+```bash
+ssh -F azssh_config 20.101.139.95 "printf 'OAUTH2_PROXY_OIDC_EMAIL_CLAIM=preferred_username\nOAUTH2_PROXY_WHITELIST_DOMAINS=ls-vladi.westeurope.cloudapp.azure.com\n' | sudo tee -a /etc/oauth2-proxy/oauth2-proxy.env >/dev/null && sudo systemctl restart oauth2-proxy && systemctl is-active oauth2-proxy"
+```
+
+**New finding (log hygiene):** oauth2-proxy logs the full callback URL,
+including the one-time **authorization code**, `state` and `session_state`.
+The code is single-use and short-lived, so the risk is low. Still,
+credentials-in-logs is an anti-pattern, especially once these logs are
+forwarded to Sentinel (Day 5). The values are redacted here.
+```text
+❯ ... | sudo tee -a /etc/oauth2-proxy/oauth2-proxy.env ... && systemctl is-active oauth2-proxy
+active
+```
+
+### 6.7 Verification: real browser login
+`https://ls-vladi.westeurope.cloudapp.azure.com/entries` in the browser goes
+to the Microsoft sign-in (account
+`volodymyr.anatolijovickharkov@cybersteps.onmicrosoft.com`) and comes back
+with the app data:
+```json
+{ "entries": [ { "id": "seed-1", "work": "Deployed the LearningSteps environment", ... },
+               { "id": "seed-2", "work": "Reviewed the handbook", ... } ],
+  "count": 2 }
+```
+The end-to-end identity flow works: Entra ID (OIDC) → oauth2-proxy session
+cookie → NPMplus Auth Request → FastAPI.
+
+### 6.8 Defense-in-depth ordering: WAF behind the identity gate
+Same SQL-injection payload as Day 2, **unauthenticated**:
+```text
+❯ curl -s -o /dev/null -w "%{http_code}\n" "https://ls-vladi.westeurope.cloudapp.azure.com/entries?id=1+UNION+SELECT+*+FROM+users"
+302
+```
+On Day 2 this returned `403`. Now it returns `302` (redirect to sign-in).
+The Auth Request check runs **before** the WAF check, so an unauthenticated
+attacker is sent to login, and the attempt never shows up as a WAF hit.
+Same payload in the **authenticated** browser tab: **`403 Forbidden`**.
+The WAF still protects against users with a valid (or stolen) session,
+which is arguably the more realistic threat. Layering controls changes what
+each one sees, so it does not simply add coverage.
+
+**Day 3 result: done and verified.** No anonymous access; invalid tokens are
+rejected; real Entra ID login works end to end; WAF active behind the gate.

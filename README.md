@@ -28,7 +28,7 @@ was changed, how, and how the fix was verified.
 | 00 | [Baseline security assessment](security/00-baseline-assessment.md): threat model, findings F-01…F-17, roadmap | ✅ done |
 | 01 | [Day 1: Management access](security/01-management-access.md) (Entra ID SSH, SSH restricted to a trusted IP) | ✅ done, verified |
 | 02 | [Day 2: TLS + Web Application Firewall](security/02-tls-waf.md) (NPMplus, Let's Encrypt, CrowdSec/CRS) | ✅ done, verified |
-| 03 | Day 3: Identity-based API access (Entra ID + oauth2-proxy) | ⏳ |
+| 03 | [Day 3: Identity-based API access](security/03-identity-api-access.md) (Entra ID + oauth2-proxy) | ✅ done, verified |
 | 04 | Day 4: Data isolation (PostgreSQL VNet integration, private DNS) | ⏳ |
 | 05 | Day 5: Detection and response (Sentinel + auto-block playbook) | ⏳ |
 
@@ -48,7 +48,7 @@ was changed, how, and how the fix was verified.
 | F-02 | Static SSH key only | Medium | Day 1 (partially: key still exists) |
 | F-03 | Public DB, firewall allows all IPs | Critical | |
 | F-04 | VM→DB over the public internet | High | |
-| F-05 | API without authentication | Critical | |
+| F-05 | API without authentication | Critical | Day 3 (authentication; no per-action authorization yet) |
 | F-06 | No TLS | High | Day 2 |
 | F-07 | No WAF | High | Day 2 |
 | F-08 | API bound to 0.0.0.0 at boot | Medium | |
