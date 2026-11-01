@@ -854,3 +854,190 @@ each one sees, so it does not simply add coverage.
 
 **Day 3 result: done and verified.** No anonymous access; invalid tokens are
 rejected; real Entra ID login works end to end; WAF active behind the gate.
+
+---
+
+## Step 7 — Day 4: Data isolation ✅
+
+Goal: take PostgreSQL off the public internet (VNet integration, delegated
+subnet, private DNS) with a **backup-first** migration. Addresses **F-03**,
+**F-04**, and partly F-16.
+
+### 7.1 Evidence "before": the database is reachable from the internet
+```text
+❯ nc -vz -w 5 psql-ls-vladi.postgres.database.azure.com 5432
+Connection to psql-ls-vladi.postgres.database.azure.com port 5432 [tcp/postgresql] succeeded!
+```
+The operator's home network (not inside Azure) can open a TCP connection to
+PostgreSQL. So can any internet scanner: password brute force against
+`psqladmin` is the only remaining barrier.
+```text
+❯ az postgres flexible-server firewall-rule list -g rg-ls-vladi -n psql-ls-vladi -o table
+unrecognized arguments: -n psql-ls-vladi
+```
+(Azure CLI 2.89 uses `--server-name` for firewall rules, not `-n`.)
+```text
+❯ az postgres flexible-server firewall-rule list -g rg-ls-vladi --server-name psql-ls-vladi -o table
+EndIpAddress     Name       ResourceGroup    StartIpAddress
+---------------  ---------  ---------------  ----------------
+255.255.255.255  allow-all  rg-ls-vladi      0.0.0.0
+```
+The cause: `azurerm_postgresql_flexible_server_firewall_rule.allow_all`
+admits the whole IPv4 space.
+
+### 7.2 Backup first
+The backup runs **on the VM**, which already has `pg_dump` 16 from
+cloud-init. The Mac would need PostgreSQL 16 client tools installed.
+
+First attempt:
+```text
+❯ ssh -F azssh_config 20.101.139.95 'DB=$(sudo systemctl show learningsteps -p Environment --value | sed "s/^DATABASE_URL=//"); pg_dump "$DB" > ...'
+pg_dump: error: invalid connection option ""DATABASE_URL"
+```
+`systemctl show -p Environment` returns the value **quoted**
+(`"DATABASE_URL=…"`), so the connection string was malformed.
+
+Fix: read it straight from the unit file. **No `sudo` needed**, because the
+unit file is world-readable, which is direct proof of **F-09**: any local
+user on the VM can read the database admin password.
+```text
+❯ ssh -F azssh_config 20.101.139.95 'DB=$(sed -n "s/^Environment=DATABASE_URL=//p" /etc/systemd/system/learningsteps.service); pg_dump "$DB" > /tmp/learningsteps_backup.sql && wc -l /tmp/learningsteps_backup.sql && grep -c "seed-" /tmp/learningsteps_backup.sql'
+610 /tmp/learningsteps_backup.sql
+2
+```
+The dump is non-empty (610 lines) and contains both seeded entries.
+Note: the dump in `/tmp` is created with the default umask, so it is
+readable by every local user. It is deleted after the restore.
+
+Off-host copy on the Mac (a backup that lives only on the server it
+protects is not a backup):
+```text
+❯ scp -F azssh_config 20.101.139.95:/tmp/learningsteps_backup.sql .
+learningsteps_backup.sql      100%   16KB 148.1KB/s   00:00
+```
+`*.sql` is already in `.gitignore`, so the dump cannot be committed by accident.
+
+### 7.3 `terraform plan` before the migration: an unexpected NSG change
+```text
+❯ terraform plan
+Plan: 5 to add, 1 to change, 3 to destroy.
+
+❯ terraform plan -no-color | grep -E "will be|must be"
+  # azurerm_network_security_group.app will be updated in-place     <- not part of Day 4!
+  # azurerm_postgresql_flexible_server.main must be replaced
+  # azurerm_postgresql_flexible_server_database.app must be replaced
+  # azurerm_postgresql_flexible_server_firewall_rule.allow_all will be destroyed
+  # azurerm_private_dns_zone.postgres will be created
+  # azurerm_private_dns_zone_virtual_network_link.postgres will be created
+  # azurerm_subnet.db will be created
+
+❯ terraform plan -no-color -target=azurerm_network_security_group.app | grep -E "^\s+[-+] +(name|source_address_prefix|priority|access) "
+  - access = "Deny"   - name = "sentinel-block-45-45-237-39"   - priority = 100   - source_address_prefix = "45.45.237.39"
+  (allow-ssh / allow-http / allow-https: removed and re-added unchanged)
+```
+
+**Findings:**
+1. **The Day 5 auto-response already fired, live.** The external scanner
+   `45.45.237.39` (Step 5.11) produced ≥5 WAF 403s. The Sentinel analytics
+   rule raised a High incident, the automation rule ran the Logic App
+   playbook, and the playbook added a **Deny** rule `sentinel-block-45-45-237-39`
+   at priority 100 to `nsg-app`, all without human involvement.
+2. **Terraform would have undone it.** The NSG used *inline* `security_rule`
+   blocks, so Terraform owns the full rule set and treats the playbook's
+   rule as drift. `terraform apply` for Day 4 would have **deleted the
+   block**, re-admitting a known attacker. IaC and automated response were
+   fighting each other.
+3. The clean plan from Step 4 paid off: the one unexpected `1 to change`
+   stood out immediately.
+
+**Fix:** split the rules into standalone `azurerm_network_security_rule`
+resources (branch `day/4-nsg-standalone-rules`). The NSG then has no inline
+rules, and its `security_rule` attribute is optional and computed, so
+Terraform stops managing the full set. The existing three rules are imported
+into the new resources once, so Terraform manages *its* rules and leaves
+`sentinel-block-*` rules alone. Drift on our own rules (e.g. SSH reopened to
+`*`) is still detected.
+
+Import of the three existing rules (PR #9 merged first):
+```text
+❯ NSG_ID=$(az network nsg show -g rg-ls-vladi -n nsg-app --query id -o tsv)
+❯ terraform import azurerm_network_security_rule.allow_ssh   "$NSG_ID/securityRules/allow-ssh"
+Import successful!
+❯ terraform import azurerm_network_security_rule.allow_http  "$NSG_ID/securityRules/allow-http"
+Import successful!
+❯ terraform import azurerm_network_security_rule.allow_https "$NSG_ID/securityRules/allow-https"
+Import successful!
+```
+
+Control plan after the import:
+```text
+❯ terraform plan -no-color | grep -E "will be|must be|^Plan"
+  # azurerm_postgresql_flexible_server.main must be replaced
+  # azurerm_postgresql_flexible_server_database.app must be replaced
+  # azurerm_postgresql_flexible_server_firewall_rule.allow_all will be destroyed
+  # azurerm_private_dns_zone.postgres will be created
+  # azurerm_private_dns_zone_virtual_network_link.postgres will be created
+  # azurerm_subnet.db will be created
+Plan: 5 to add, 0 to change, 3 to destroy.
+```
+The NSG is no longer touched, so the Sentinel block rule survives. The VM is
+**not** replaced. Only the intended Day 4 changes remain.
+
+### 7.4 Migration
+```text
+❯ terraform apply
+Apply complete! Resources: 5 added, 0 changed, 3 destroyed.
+```
+The PostgreSQL server was destroyed and recreated inside `snet-db` with no
+public endpoint. The new server is empty, so a restore is needed.
+
+### 7.5 Restore through the VM
+The database has no public endpoint any more, so the restore runs on the
+VM, which is inside the VNet, from the dump kept in `/tmp`:
+```text
+❯ ssh -F azssh_config 20.101.139.95 'DB=$(sed -n "s/^Environment=DATABASE_URL=//p" /etc/systemd/system/learningsteps.service); psql "$DB" -q -f /tmp/learningsteps_backup.sql; psql "$DB" -tAc "select count(*) from entries"'
+ set_config
+------------
+(1 row)
+psql:/tmp/learningsteps_backup.sql:84: WARNING:  no privileges were granted for "pg_replication_origin_advance"
+...  (~75 similar WARNING lines for pg_stat_reset*, pg_config, pg_hba_file_rules,
+      pg_statistic, pg_subscription, pg_shmem_allocations, …)
+psql:/tmp/learningsteps_backup.sql:602: WARNING:  no privileges were granted for column "subpublications" of relation "pg_subscription"
+2
+```
+- **`2`**: both entries are back, and the restore is complete.
+- The `WARNING`s are harmless. A plain `pg_dump` of an Azure Flexible Server
+  also dumps Azure's own `GRANT`s on system catalog objects (`pg_catalog`).
+  The admin user `psqladmin` is not a real superuser on a managed server,
+  so it cannot re-grant those, and PostgreSQL skips them with a warning.
+  Application objects (table `entries` and its rows) are not affected.
+  `pg_dump --no-acl` or `--no-privileges` would avoid this noise.
+
+### 7.6 App recovered
+(The Entra ID SSH certificate expired again in between, so `az ssh config … --overwrite` was re-run.)
+```text
+❯ ssh -F azssh_config 20.101.139.95 'sudo systemctl restart learningsteps && sleep 3 && curl -s localhost:8000/entries'
+{"entries":[{"id":"seed-1",...},{"id":"seed-2",...}],"count":2}
+```
+The app on the VM reaches the database through its private IP. The FQDN
+`psql-ls-vladi.postgres.database.azure.com` now resolves through the
+private DNS zone inside the VNet. The connection string did not change.
+
+### 7.7 Verification "after": the database is gone from the internet
+```text
+❯ nc -vz -w 5 psql-ls-vladi.postgres.database.azure.com 5432
+nc: getaddrinfo: nodename nor servname provided, or not known
+```
+Before: `succeeded`. Now the name **does not even resolve** outside the
+VNet. There is no public IP, no public DNS record and no firewall rule left
+to attack. **F-03 and F-04 mitigated.**
+
+### 7.8 Cleanup
+```text
+❯ ssh -F azssh_config 20.101.139.95 'rm -f /tmp/learningsteps_backup.sql && ls /tmp/learningsteps_backup.sql 2>&1'
+ls: cannot access '/tmp/learningsteps_backup.sql': No such file or directory
+```
+The world-readable dump on the VM is deleted. The off-host copy stays on the
+operator's Mac (git-ignored).
+
+**Day 4 result: done and verified.**
