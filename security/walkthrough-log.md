@@ -1041,3 +1041,206 @@ The world-readable dump on the VM is deleted. The off-host copy stays on the
 operator's Mac (git-ignored).
 
 **Day 4 result: done and verified.**
+
+---
+
+## Step 8 — Day 5: Detection and response ✅
+
+Goal: show the full chain end to end. NPMplus access log → syslog (JSON) →
+Azure Monitor Agent → Log Analytics → Sentinel analytics rule → incident →
+automation rule → Logic App playbook → NSG Deny rule. Addresses **F-14**.
+The chain is deployed by `sentinel.tf` and `scripts/setup-json-logging.sh`.
+`handbook.md` has no Day 5 section any more, so the steps below are our own.
+
+### 8.1 Response: the NSG block rule
+```text
+❯ az network nsg rule list -g rg-ls-vladi --nsg-name nsg-app --query "[].{name:name, priority:priority, access:access, source:sourceAddressPrefix, port:destinationPortRange}" -o table
+Name                         Priority    Access    Source         Port
+---------------------------  ----------  --------  -------------  ------
+allow-http                   1010        Allow     *              80
+allow-https                  1020        Allow     *              443
+allow-ssh                    1000        Allow     91.38.119.x    22
+sentinel-block-45-45-237-39  100         Deny      45.45.237.39   *
+```
+The playbook's Deny rule is in place: priority 100 is evaluated **before** all
+allow rules (1000+), and it covers all ports. It survived the Day 4 `apply`
+thanks to the standalone-rules fix, so the attacker `45.45.237.39` is cut
+off at the network layer before it reaches NPMplus or the WAF.
+
+### 8.2 Detection: the Sentinel incident
+```text
+❯ az rest --method get --url "https://management.azure.com<workspace-id>/providers/Microsoft.SecurityInsights/incidents?api-version=2023-02-01" \
+    --query "value[].{number:properties.incidentNumber, title:properties.title, severity:properties.severity, status:properties.status, created:properties.createdTimeUtc}" -o table
+Number    Title                                         Severity    Status    Created
+--------  --------------------------------------------  ----------  --------  -----------------------
+1         WAF Attack — High Volume 403s from Single IP  High        New       2026-11-01T19:14:07.16Z
+```
+The scheduled analytics rule `waf-attack-scheduled` (≥5 WAF 403s from one IP
+in 5 minutes) raised incident #1 with severity **High**. The scanner's LFI
+burst was at 19:03:53–55 UTC (Step 5.11). Detection came ~10 minutes later:
+log ingestion delay plus the 5-minute query schedule.
+
+### 8.3 Response: the playbook run
+```text
+❯ az rest --method get --url "https://management.azure.com<playbook-id>/runs?api-version=2019-05-01" \
+    --query "value[].{start:properties.startTime, end:properties.endTime, status:properties.status}" -o table
+Start                        End                           Status
+---------------------------  ----------------------------  ---------
+2026-11-01T19:14:13.372156Z  2026-11-01T19:14:15.6047031Z  Succeeded
+```
+The automation rule triggered the Logic App **6 seconds** after the incident
+was created (19:14:07 → 19:14:13). The playbook ran for **2.2 s** and created
+the NSG Deny rule from 8.1. No human was involved.
+
+### 8.4 Source: WAF blocks in Log Analytics (the data behind the rule)
+First attempt failed on a KQL syntax error (`first` and `last` are reserved
+words: `SYN0002 Query could not be parsed at 'first'`). The columns were renamed.
+The `log-analytics` CLI extension was installed on demand (preview).
+```text
+❯ az monitor log-analytics query -w <workspace-guid> --timespan P1D --analytics-query "Syslog | where ProcessName == 'nginx' | extend log = parse_json(SyslogMessage) | where toint(log.status) == 403 | summarize Blocks = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated) by ClientIP = tostring(log.remote_addr) | order by Blocks desc" -o table
+Blocks    ClientIP       FirstSeen                    LastSeen
+--------  -------------  ---------------------------  ---------------------------
+24        45.45.237.39   2026-11-01T19:03:53.890597Z  2026-11-01T19:03:55.947998Z
+11        127.0.0.1      2026-11-01T18:55:26.61604Z   2026-11-01T19:55:03.012648Z
+3         91.38.119.x    2026-11-01T19:04:52.40869Z   2026-11-01T20:01:40.669118Z
+```
+How this data maps to the outcome:
+
+| Source | 403s | Outcome | Why |
+|---|---|---|---|
+| `45.45.237.39` (scanner) | 24 in 2 s | **incident + blocked** | ≥5 in a 5-minute window |
+| `127.0.0.1` | 11 | ignored | Our own WAF blocking NPMplus admin calls through the SSH tunnel (Day 3, 6.4). The rule excludes `127.0.0.1` on purpose: a Deny rule for it would be meaningless |
+| operator IP | 3 | no incident | Our deliberate tests (SQLi, XSS, authenticated SQLi), below the threshold of 5. The threshold protects legitimate users from blocking themselves |
+
+The full pipeline works: NPMplus `access.log` → `npmplus-log-forwarder`
+(JSON → syslog `local0`, tag `nginx`) → Azure Monitor Agent + DCR → `Syslog`
+table → scheduled rule → incident → automation rule → playbook → NSG.
+
+### 8.5 Live controlled test from a second IP (Azure Cloud Shell)
+The test must **not** run from the operator's Mac: a block would cut off
+the operator's own SSH and HTTPS access. Cloud Shell has a different
+public IP.
+```text
+volodymyr [ ~ ]$ curl -s -4 ifconfig.me; echo; for p in "/entries?id=1+UNION+SELECT+*+FROM+users" "/oauth2/sign_in?rd=1+UNION+SELECT+*+FROM+users"; do for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w "%{http_code} " "https://ls-vladi.westeurope.cloudapp.azure.com$p"; done; echo " <- $p"; done
+134.149.156.75
+302 302 302 302 302 302  <- /entries?id=1+UNION+SELECT+*+FROM+users
+403 403 403 403 403 403  <- /oauth2/sign_in?rd=1+UNION+SELECT+*+FROM+users
+```
+
+**Finding: a detection blind spot created by Day 3.** Unauthenticated
+attacks against the protected app (`/entries`) get `302` from the Auth
+Request **before** the WAF inspects them. They never produce a 403, never
+appear in the 403-based analytics rule, and never trigger a block. An
+attacker can probe the API forever without being noticed. Only paths the
+WAF actually sees (here: the public `/oauth2/sign_in` endpoint) generate 403s.
+
+Fix options: also alert on high volumes of `302` to `/oauth2/sign_in` per IP;
+let the WAF evaluate the request before `auth_request` (scoring payloads
+even for unauthenticated clients); or feed CrowdSec's own AppSec alerts
+(which see the payload) into Sentinel instead of relying only on HTTP status
+codes.
+
+Result of the live test:
+```text
+❯ az rest ... /incidents ...                      # detection worked
+Number    Title                                         Created
+2         WAF Attack — High Volume 403s from Single IP  2026-11-01T21:09:28.89Z
+1         WAF Attack — High Volume 403s from Single IP  2026-11-01T19:14:07.16Z
+
+❯ az network nsg rule list ... "[?starts_with(name,'sentinel-block')]"   # but no new block
+sentinel-block-45-45-237-39  100  Deny  45.45.237.39
+
+❯ az rest ... /runs ...
+2026-11-01T21:09:35Z  Failed     An action failed. No dependent actions succeeded.
+2026-11-01T19:14:13Z  Succeeded
+
+❯ az rest ... /runs/$RUN/actions ...
+Block_IP_in_NSG   Failed     NotSpecified
+Entities_Get_IPs  Succeeded  OK
+For_each_IP       Failed     ActionFailed
+
+❯ curl -s "<outputsLink of Block_IP_in_NSG repetition>" | ...
+"code": "SecurityRuleConflict",
+"message": "Security rule sentinel-block-45-45-237-39 conflicts with rule sentinel-block-134-149-156-75. Rules cannot have the same Priority and Direction."
+```
+(Along the way: the first KQL check showed no Cloud Shell records only
+because it ran before ingestion completed. The suspected "ingestion delay
+longer than the rule's 5-minute window" problem did **not** occur here:
+incident #2 was created. The hypothesis was tested and rejected.)
+
+**Finding: the auto-block can only ever block ONE attacker.** The playbook
+hard-codes `"priority": 100` for every block rule. NSG rules in the same
+direction must have unique priorities, so the second block is rejected with
+`SecurityRuleConflict`. Detection works, but the response silently fails
+for every attacker after the first. The real scanner happened to be first,
+which hid the bug until a second, controlled test.
+
+**Fix** (`templates/block-ip-playbook.json`, branch `day/5-fix-playbook-priority`):
+inside the loop the playbook first reads the NSG (`Get_NSG`), filters the
+*other* `sentinel-block-*` rules, and uses `max(priorities, 99) + 1`, so
+the first block gets 100, then 101, 102, …, all still before the allow rules
+at 1000+. The loop runs with `concurrency: 1`, so two IPs from one incident
+cannot race for the same priority. Re-blocking an IP updates its rule.
+
+Rollout of the fix: `terraform plan` after merging PR #11:
+```text
+❯ terraform plan -no-color | grep -E "will be|must be|^Plan"
+  # azurerm_resource_group_template_deployment.block_ip_playbook will be updated in-place
+  # azurerm_role_assignment.playbook_network_contributor must be replaced
+  # azurerm_role_assignment.playbook_sentinel_responder must be replaced
+  # azurerm_role_assignment.sentinel_can_trigger_playbook must be replaced
+  # azurerm_sentinel_automation_rule.block_attacker will be updated in-place
+  # azurerm_subnet.db will be updated in-place
+Plan: 3 to add, 3 to change, 3 to destroy.
+```
+- Template update: expected. The role assignments and the automation rule
+  depend on `jsondecode(...output_content)`, which becomes "known after
+  apply" whenever the template changes, so Terraform conservatively
+  replaces them. The Logic App and its identity are not recreated.
+- **`azurerm_subnet.db`: unexpected drift.**
+  ```text
+  ~ service_endpoints = [ - "Microsoft.Storage", ]
+  ```
+  Azure adds the `Microsoft.Storage` service endpoint by itself when a
+  Flexible Server is injected into the subnet (WAL and backups go to Azure
+  Storage). Terraform would have removed it. Fix (PR #12): declare it in
+  `network.tf`. Once again the clean-plan discipline caught it before
+  `apply`.
+```text
+❯ terraform apply
+Apply complete! Resources: 3 added, 1 changed, 3 destroyed.
+```
+After waiting a few minutes for RBAC propagation of the recreated role
+assignments, the failed run for incident #2 was **resubmitted** with the
+fixed playbook (Logic Apps trigger-history `resubmit`):
+```text
+❯ ... az rest --method post --url "https://management.azure.com$PB/triggers/$TRG/histories/$RUN/resubmit?api-version=2016-06-01" && echo resubmitted
+resubmitted
+
+❯ az rest ... /runs ...; az network nsg rule list ... "[?starts_with(name,'sentinel-block')]"
+Start                         Status
+2026-11-01T21:54:48.0976908Z  Succeeded     <- resubmitted run, fixed playbook
+2026-11-01T21:09:35.0642688Z  Failed        <- SecurityRuleConflict (priority 100 taken)
+2026-11-01T19:14:13.372156Z   Succeeded
+Name                           Priority    Access    Source
+sentinel-block-45-45-237-39    100         Deny      45.45.237.39
+sentinel-block-134-149-156-75  101         Deny      134.149.156.75
+```
+The second attacker is blocked with the next free priority, **101**. The
+auto-block now scales to many attackers.
+
+Final check from both sides:
+```text
+volodymyr [ ~ ]$ curl -s -4 ifconfig.me                                                                                    # Cloud Shell: same IP as in the test
+134.149.156.75
+volodymyr [ ~ ]$ curl -s -m 10 -o /dev/null -w "%{http_code}\n" https://ls-vladi.westeurope.cloudapp.azure.com/entries    # Cloud Shell (blocked IP)
+000
+❯ curl -s -m 10 -o /dev/null -w "%{http_code}\n" https://ls-vladi.westeurope.cloudapp.azure.com/entries                    # operator Mac
+302
+```
+The blocked IP gets **no TCP connection at all** (`000`): the NSG drops it
+before NPMplus. The operator's IP is unaffected and is redirected to sign-in
+as usual.
+
+**Day 5 result: done and verified**, including two bugs found and fixed
+during the live test (playbook priority conflict, DB subnet endpoint drift).
