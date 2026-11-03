@@ -89,8 +89,10 @@ CrowdSecAlerts
 | order by Alerts desc
 ```
 
-This also covers part of the blind spot below: CrowdSec AppSec inspects
-requests that the identity gate answers with `302`. `TimeGenerated` in
+This does **not** close the `302` blind spot below: the identity gate answers
+unauthenticated requests before AppSec inspects them, so they produce no
+AppSec alert either. Only CrowdSec's log-based scenarios (which read
+`access.log` regardless of the status code) can see them. `TimeGenerated` in
 `CrowdSecAlerts` is the alert's own creation time; on its first start the
 forwarder back-fills the last 24 h.
 
@@ -121,6 +123,15 @@ forwarder back-fills the last 24 h.
 6. **Azure-managed drift on the DB subnet.** Azure adds the `Microsoft.Storage`
    service endpoint to the delegated subnet, and Terraform would have removed
    it, which could break backups. Declared in code (PR #12).
+
+### Finding: CrowdSec log acquisition read nothing
+
+`cscli metrics show acquisition` on the live VM returned an **empty table**.
+The acquisition config pointed at `/opt/npmplus/nginx/*.log`, but the
+crowdsec container only mounts `/opt/npmplus/nginx/logs`, so no file matched.
+Since Day 2 only the in-band AppSec (CRS) was working; the log-based
+scenarios (probing, path traversal, brute force on paths) never saw a line.
+Fix: `/opt/npmplus/nginx/logs/*.log` in `scripts/setup-npmplus.sh`.
 
 ## Residual risk
 

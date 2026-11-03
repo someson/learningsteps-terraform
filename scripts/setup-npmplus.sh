@@ -134,15 +134,20 @@ inband_rules:
 EOF
 
 echo "==> Writing CrowdSec acquisition config..."
+# The crowdsec container only mounts /opt/npmplus/nginx/logs (see compose.yaml
+# above), so the log files are at /opt/npmplus/nginx/logs/*.log inside it.
+# Found live: the earlier pattern /opt/npmplus/nginx/*.log matched no file, so
+# `cscli metrics show acquisition` was empty and only AppSec was working; the
+# log-based scenarios (http-probing, path traversal, ...) never saw a line.
 cat > /opt/crowdsec/conf/acquis.d/npmplus.yaml << 'EOF'
 ---
 filenames:
-  - /opt/npmplus/nginx/*.log
+  - /opt/npmplus/nginx/logs/*.log
 labels:
   type: npmplus
 ---
 filenames:
-  - /opt/npmplus/nginx/*.log
+  - /opt/npmplus/nginx/logs/*.log
 labels:
   type: modsecurity
 ---
