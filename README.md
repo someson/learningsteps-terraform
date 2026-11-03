@@ -75,9 +75,9 @@ Details are in the [Findings tracker](#findings-tracker).
 - **Ubuntu VM** (Standard_D2s_v6 by default, configurable via `vm_size`) in `snet-app`, running the FastAPI app (localhost only), NPMplus (reverse proxy + Let's Encrypt), CrowdSec (WAF) and oauth2-proxy
 - **Azure PostgreSQL Flexible Server** (B1ms) injected into the delegated subnet `snet-db`, with a private DNS zone and **no public endpoint**
 - **NSG** with standalone rules: SSH only from `admin_source_ip`, HTTP/HTTPS from anywhere. Priorities 100–999 are reserved for Sentinel auto-block rules
-- **VNet flow logs + Traffic Analytics** (`flowlogs.tf`): every flow with the NSG verdict, in `NTANetAnalytics`; saved searches in category *Network* (denied flows per day, top denied IPs)
 - **Log Analytics + Microsoft Sentinel**: syslog via Azure Monitor Agent, a WAF-attack analytics rule, and a Logic App playbook that blocks attacker IPs in the NSG
 - **CrowdSec alerts in Sentinel**: `CrowdSecAlerts` KQL function and saved searches (attack type per IP); the VM side is installed by `scripts/setup-crowdsec-logging.sh`
+- **VNet flow logs + Traffic Analytics** (`flowlogs.tf`): every flow with the NSG verdict, in `NTANetAnalytics`; saved searches in category *Network* (denied flows per day, top denied IPs)
 
 > TLS, the WAF bouncer, the Entra ID app registration and oauth2-proxy are configured as described in the per-day documents. They are not created by `terraform apply`.
 
