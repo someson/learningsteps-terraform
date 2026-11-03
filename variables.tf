@@ -54,3 +54,21 @@ variable "admin_source_ip" {
     error_message = "admin_source_ip must be an IPv4 address or IPv4 CIDR (e.g. 203.0.113.10 or 203.0.113.0/24). \"*\" and IPv6 are not allowed."
   }
 }
+
+variable "network_watcher_name" {
+  description = "Existing Network Watcher in the deployment region. Azure creates it automatically as NetworkWatcher_<location> in NetworkWatcherRG; null means that default."
+  type        = string
+  default     = null
+}
+
+variable "network_watcher_resource_group" {
+  description = "Resource group of the Network Watcher (Azure's default is NetworkWatcherRG)."
+  type        = string
+  default     = "NetworkWatcherRG"
+}
+
+variable "flow_log_retention_days" {
+  description = "How long raw VNet flow logs are kept in the storage account. Traffic Analytics data in Log Analytics follows the workspace retention (30 days)."
+  type        = number
+  default     = 7
+}

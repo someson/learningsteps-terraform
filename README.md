@@ -75,6 +75,7 @@ Details are in the [Findings tracker](#findings-tracker).
 - **Ubuntu VM** (Standard_D2s_v6 by default, configurable via `vm_size`) in `snet-app`, running the FastAPI app (localhost only), NPMplus (reverse proxy + Let's Encrypt), CrowdSec (WAF) and oauth2-proxy
 - **Azure PostgreSQL Flexible Server** (B1ms) injected into the delegated subnet `snet-db`, with a private DNS zone and **no public endpoint**
 - **NSG** with standalone rules: SSH only from `admin_source_ip`, HTTP/HTTPS from anywhere. Priorities 100–999 are reserved for Sentinel auto-block rules
+- **VNet flow logs + Traffic Analytics** (`flowlogs.tf`): every flow with the NSG verdict, in `NTANetAnalytics`; saved searches in category *Network* (denied flows per day, top denied IPs)
 - **Log Analytics + Microsoft Sentinel**: syslog via Azure Monitor Agent, a WAF-attack analytics rule, and a Logic App playbook that blocks attacker IPs in the NSG
 - **CrowdSec alerts in Sentinel**: `CrowdSecAlerts` KQL function and saved searches (attack type per IP); the VM side is installed by `scripts/setup-crowdsec-logging.sh`
 
@@ -97,6 +98,7 @@ was changed, how, and how the fix was verified.
 | 03 | [Day 3: Identity-based API access](security/03-identity-api-access.md) (Entra ID + oauth2-proxy) | ✅ done, verified |
 | 04 | [Day 4: Data isolation](security/04-data-isolation.md) (PostgreSQL VNet integration, private DNS) | ✅ done, verified |
 | 05 | [Day 5: Detection and response](security/05-detection-response.md) (Sentinel + auto-block playbook) | ✅ done, verified |
+| 06 | [Network visibility](security/06-network-visibility.md) (VNet flow logs, Traffic Analytics) | ✅ deployed by Terraform, live verification pending |
 
 ### Structure of each day's document
 
