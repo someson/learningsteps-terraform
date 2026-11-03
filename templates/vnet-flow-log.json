@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "networkWatcherName": {
+      "type": "String"
+    },
+    "flowLogName": {
+      "type": "String"
+    },
+    "location": {
+      "type": "String"
+    },
+    "targetResourceId": {
+      "type": "String"
+    },
+    "storageId": {
+      "type": "String"
+    },
+    "retentionDays": {
+      "type": "Int"
+    },
+    "workspaceGuid": {
+      "type": "String"
+    },
+    "workspaceRegion": {
+      "type": "String"
+    },
+    "workspaceResourceId": {
+      "type": "String"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkWatchers/flowLogs",
+      "apiVersion": "2024-05-01",
+      "name": "[concat(parameters('networkWatcherName'), '/', parameters('flowLogName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "targetResourceId": "[parameters('targetResourceId')]",
+        "storageId": "[parameters('storageId')]",
+        "enabled": true,
+        "format": {
+          "type": "JSON",
+          "version": 2
+        },
+        "retentionPolicy": {
+          "days": "[parameters('retentionDays')]",
+          "enabled": true
+        },
+        "flowAnalyticsConfiguration": {
+          "networkWatcherFlowAnalyticsConfiguration": {
+            "enabled": true,
+            "workspaceId": "[parameters('workspaceGuid')]",
+            "workspaceRegion": "[parameters('workspaceRegion')]",
+            "workspaceResourceId": "[parameters('workspaceResourceId')]",
+            "trafficAnalyticsInterval": 10
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "flowLogId": {
+      "type": "String",
+      "value": "[resourceId('Microsoft.Network/networkWatchers/flowLogs', parameters('networkWatcherName'), parameters('flowLogName'))]"
+    }
+  }
+}

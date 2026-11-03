@@ -80,6 +80,7 @@ Details are in the [Findings tracker](#findings-tracker).
 - **NSG** with standalone rules: SSH only from `admin_source_ip`, HTTP/HTTPS from anywhere. Priorities 100–999 are reserved for Sentinel auto-block rules
 - **Log Analytics + Microsoft Sentinel**: syslog via Azure Monitor Agent, a WAF-attack analytics rule, and a Logic App playbook that blocks attacker IPs in the NSG
 - **CrowdSec alerts in Sentinel**: `CrowdSecAlerts` KQL function and saved searches (attack type per IP); the VM side is installed by `scripts/setup-crowdsec-logging.sh`
+- **VNet flow logs + Traffic Analytics** (`flowlogs.tf`): every flow with the NSG verdict, in `NTANetAnalytics`; saved searches in category *Network* (denied flows per day, top denied IPs)
 
 > TLS, the WAF bouncer, the Entra ID app registration and oauth2-proxy are configured as described in the per-day documents. They are not created by `terraform apply`.
 
@@ -100,6 +101,7 @@ was changed, how, and how the fix was verified.
 | 03 | [Day 3: Identity-based API access](security/03-identity-api-access.md) (Entra ID + oauth2-proxy) | ✅ done, verified |
 | 04 | [Day 4: Data isolation](security/04-data-isolation.md) (PostgreSQL VNet integration, private DNS) | ✅ done, verified |
 | 05 | [Day 5: Detection and response](security/05-detection-response.md) (Sentinel + auto-block playbook) | ✅ done, verified |
+| 06 | [Network visibility](security/06-network-visibility.md) (VNet flow logs, Traffic Analytics) | ✅ deployed by Terraform, live verification pending |
 | 07 | [Secrets](security/07-secrets.md) (Key Vault, managed identity, least-privilege DB role) | ✅ code done, live migration pending |
 
 ### Structure of each day's document
