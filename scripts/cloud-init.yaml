@@ -20,31 +20,20 @@ packages:
   - git
   - postgresql-client-16
 
+# F-09 / F-10: no password in this file. setup-db-secrets.sh (embedded by
+# vm.tf, base64) reads the DB passwords from Key Vault with the VM's managed
+# identity, creates the least-privilege app role and writes the systemd unit,
+# which fetches the app password at every start. Existing VMs run the same
+# script once over SSH (security/07-secrets.md).
 write_files:
-  - path: /etc/systemd/system/learningsteps.service
-    content: |
-      [Unit]
-      Description=LearningSteps API
-      After=network.target
-
-      [Service]
-      Type=simple
-      WorkingDirectory=/opt/learningsteps/api
-      Environment=DATABASE_URL=${database_url}
-      ExecStart=/opt/learningsteps/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
-      Restart=always
-      RestartSec=5
-
-      [Install]
-      WantedBy=multi-user.target
+  - path: /usr/local/sbin/setup-db-secrets.sh
+    permissions: "0755"
+    encoding: b64
+    content: ${setup_script_b64}
 
 runcmd:
   - git clone https://github.com/CyberstepsDE/learningsteps.git /opt/learningsteps
   - python3 -m venv /opt/learningsteps/venv
   - /opt/learningsteps/venv/bin/pip install --upgrade pip -q
   - /opt/learningsteps/venv/bin/pip install -r /opt/learningsteps/api/requirements.txt -q
-  - until psql "${database_url}" -c '\q' 2>/dev/null; do sleep 5; done
-  - psql "${database_url}" -f /opt/learningsteps/database_setup.sql
-  - systemctl daemon-reload
-  - systemctl enable learningsteps
-  - systemctl start learningsteps
+  - /usr/local/sbin/setup-db-secrets.sh "${key_vault_name}" "${db_host}" "${db_name}" "${db_admin_username}" "${db_app_username}"
