@@ -57,3 +57,13 @@ output "playbook_name" {
   description = "Name of the auto-block Logic App playbook"
   value       = "playbook-block-ip-${var.prefix}"
 }
+
+output "key_vault_name" {
+  description = "Key Vault holding the DB passwords (read by the VM's managed identity)"
+  value       = azurerm_key_vault.main.name
+}
+
+output "db_secrets_setup_command" {
+  description = "Migrate an existing VM to Key Vault secrets + least-privilege DB role (F-09, F-10); see security/07-secrets.md"
+  value       = "sudo bash /tmp/setup-db-secrets.sh ${azurerm_key_vault.main.name} psql-${var.prefix}.postgres.database.azure.com ${var.db_name} ${var.db_admin_username} ${var.db_app_username}"
+}

@@ -55,15 +55,17 @@ Found and fixed **manually on the VM** (not yet in the setup scripts): oauth2-pr
 
 ### Findings status (F-01 … F-17)
 
-- ✅ **Mitigated (7):** F-01, F-03, F-04, F-05, F-06, F-07, F-14
-- 🟡 **Partially (4):** F-02, F-08, F-11, F-16
-- ⏳ **Open (6):** F-09, F-10, F-12, F-13, F-15, F-17
+- ✅ **Mitigated (9):** F-01, F-03, F-04, F-05, F-06, F-07, F-08, F-10, F-14
+- 🟡 **Partially (4):** F-02, F-09, F-11, F-16
+- ⏳ **Open (4):** F-12, F-13, F-15, F-17
+
+F-08, F-09 and F-10 count as mitigated once `scripts/setup-db-secrets.sh` has run on the VM ([07](security/07-secrets.md)).
 
 Details are in the [Findings tracker](#findings-tracker).
 
 ### What is still open (next steps)
 
-1. **Secrets** (F-09, F-10): the DB admin password is in plaintext in the systemd unit (world-readable), in `custom_data` and in Terraform state, and the app uses the admin account. → dedicated least-privilege DB role; **Key Vault** + managed identity, or **Entra ID auth for PostgreSQL** (no password at all).
+1. **Secrets** (F-09, F-15): DB passwords are now in Key Vault and the app uses a least-privilege role ([07](security/07-secrets.md)), but both passwords are still in Terraform state. → remote state with RBAC; **Entra ID auth for PostgreSQL** (no password at all, needs token refresh in the app).
 2. **Authorization** (F-17): any user of the tenant can sign in, and every user can `DELETE` all entries. → "Assignment required" + group; per-action authorization in the app.
 3. **Detection blind spot:** unauthenticated attacks get `302` before the WAF sees them, so the 403-based rule cannot fire. → alert on `302` bursts, run AppSec before `auth_request`, or ship CrowdSec alerts to Sentinel. Now covered by a second Sentinel rule on `CrowdSecAlerts`: CrowdSec's log-based scenarios read `access.log` whatever the status code, and their alerts trigger the same auto-block (see `security/05-detection-response.md`). AppSec itself still does not see these requests.
 4. **Manual state:** TLS, WAF, oauth2-proxy and the Entra ID app are configured by hand. → codify (`azuread` provider, setup scripts) or use managed services: Application Gateway / Front Door WAF, App Service authentication.
@@ -74,6 +76,7 @@ Details are in the [Findings tracker](#findings-tracker).
 
 - **Ubuntu VM** (Standard_D2s_v6 by default, configurable via `vm_size`) in `snet-app`, running the FastAPI app (localhost only), NPMplus (reverse proxy + Let's Encrypt), CrowdSec (WAF) and oauth2-proxy
 - **Azure PostgreSQL Flexible Server** (B1ms) injected into the delegated subnet `snet-db`, with a private DNS zone and **no public endpoint**
+- **Key Vault** (`keyvault.tf`) with the DB passwords, readable only by the VM's managed identity from `snet-app`; the app connects as the least-privilege role `learningsteps_app`
 - **NSG** with standalone rules: SSH only from `admin_source_ip`, HTTP/HTTPS from anywhere. Priorities 100–999 are reserved for Sentinel auto-block rules
 - **Log Analytics + Microsoft Sentinel**: syslog via Azure Monitor Agent, two analytics rules (WAF 403 volume, CrowdSec alerts), and a Logic App playbook that blocks attacker IPs in the NSG
 - **CrowdSec alerts in Sentinel**: `CrowdSecAlerts` KQL function and saved searches (attack type per IP); the VM side is installed by `scripts/setup-crowdsec-logging.sh`
@@ -99,6 +102,7 @@ was changed, how, and how the fix was verified.
 | 04 | [Day 4: Data isolation](security/04-data-isolation.md) (PostgreSQL VNet integration, private DNS) | ✅ done, verified |
 | 05 | [Day 5: Detection and response](security/05-detection-response.md) (Sentinel + auto-block playbook) | ✅ done, verified |
 | 06 | [Network visibility](security/06-network-visibility.md) (VNet flow logs, Traffic Analytics) | ✅ deployed by Terraform, live verification pending |
+| 07 | [Secrets](security/07-secrets.md) (Key Vault, managed identity, least-privilege DB role) | ✅ code done, live migration pending |
 
 ### Structure of each day's document
 
@@ -119,9 +123,9 @@ was changed, how, and how the fix was verified.
 | F-05 | API without authentication | Critical | Day 3 (authentication; no per-action authorization yet) |
 | F-06 | No TLS | High | Day 2 |
 | F-07 | No WAF | High | Day 2 |
-| F-08 | API bound to 0.0.0.0 at boot | Medium | Partially (rebound to 127.0.0.1 by `setup-npmplus.sh`; port 8000 never opened in the NSG) |
-| F-09 | DB password in plaintext (state, custom_data, unit file) | High | |
-| F-10 | App uses DB admin account | Medium | |
+| F-08 | API bound to 0.0.0.0 at boot | Medium | 07 (start script binds to 127.0.0.1 from the first boot) |
+| F-09 | DB password in plaintext (state, custom_data, unit file) | High | 07, partially (Key Vault + managed identity; still in Terraform state → F-15) |
+| F-10 | App uses DB admin account | Medium | 07 (role `learningsteps_app`: DML on `entries` only) |
 | F-11 | Default NPMplus admin credentials | High | Day 2 (password changed; default still in script) |
 | F-12 | SSH host key verification disabled in deploy.py | Low | |
 | F-13 | Unpinned images / dependencies | Low–Medium | |

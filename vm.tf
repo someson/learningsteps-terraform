@@ -82,8 +82,18 @@ resource "azurerm_linux_virtual_machine" "vm" {
   # Docker/NPMplus/oauth2-proxy were gone entirely. Using a statically
   # derivable FQDN removes the dependency edge, so replacing the database
   # server no longer forces a VM replacement.
+  #
+  # F-09: custom_data contains NO secret any more. It only carries the Key
+  # Vault name and the DB coordinates; the VM fetches both passwords from Key
+  # Vault with its managed identity (scripts/setup-db-secrets.sh, embedded
+  # here so cloud-init and the manual migration run the same code).
   custom_data = base64encode(templatefile("${path.module}/scripts/cloud-init.yaml", {
-    database_url = "postgresql://${var.db_admin_username}:${var.db_admin_password}@psql-${var.prefix}.postgres.database.azure.com/${var.db_name}?sslmode=require"
+    key_vault_name    = azurerm_key_vault.main.name
+    db_host           = "psql-${var.prefix}.postgres.database.azure.com"
+    db_name           = var.db_name
+    db_admin_username = var.db_admin_username
+    db_app_username   = var.db_app_username
+    setup_script_b64  = base64encode(file("${path.module}/scripts/setup-db-secrets.sh"))
   }))
 
   # Explicit ordering only (cloud-init's runcmd already retries the DB
@@ -98,13 +108,25 @@ resource "azurerm_linux_virtual_machine" "vm" {
   # own retry loop eventually connects and creates the table, but
   # deploy.py's separate seeding step (running moments later) can still
   # lose that race and find the table gone.
-  depends_on = [azurerm_postgresql_flexible_server.main]
+  depends_on = [
+    azurerm_postgresql_flexible_server.main,
+    # The secrets must exist before first boot; the VM's own read access
+    # (azurerm_key_vault_access_policy.vm) can only be created after the VM,
+    # so cloud-init retries until it works (kv-secret --wait).
+    azurerm_key_vault_secret.db_admin_password,
+    azurerm_key_vault_secret.db_app_password,
+  ]
 
   # "created-on" is stamped on every resource by Azure (most likely a tenant policy), not by
   # this code. Ignore only that key; all other tags are still compared.
   lifecycle {
     ignore_changes = [
       tags["created-on"],
+      # custom_data only runs on first boot, and changing it REPLACES the VM
+      # (wiping NPMplus, oauth2-proxy, CrowdSec — see the comment above).
+      # Existing VMs are migrated with scripts/setup-db-secrets.sh instead
+      # (security/07-secrets.md); new VMs get the current template.
+      custom_data,
       # Azure enables this server-side; azurerm 3.x defaults it to false
       # and would try to switch it off on every apply.
       vm_agent_platform_updates_enabled,

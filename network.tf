@@ -16,6 +16,10 @@ resource "azurerm_subnet" "app" {
   resource_group_name  = azurerm_resource_group.main.name
   virtual_network_name = azurerm_virtual_network.main.name
   address_prefixes     = ["10.0.1.0/24"]
+
+  # F-09: the VM reaches Key Vault through this service endpoint; the vault's
+  # firewall (keyvault.tf) admits this subnet and the operator's IP only.
+  service_endpoints = ["Microsoft.KeyVault"]
 }
 
 # The NSG itself carries NO inline rules. Each rule is a separate
