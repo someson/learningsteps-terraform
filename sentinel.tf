@@ -236,3 +236,85 @@ resource "azurerm_sentinel_automation_rule" "block_attacker" {
     azurerm_role_assignment.sentinel_can_trigger_playbook,
   ]
 }
+
+# ── CrowdSec alerts in Sentinel ───────────────────────────────────────────────
+# scripts/setup-crowdsec-logging.sh forwards every CrowdSec alert as JSON to
+# syslog local0 (tag "crowdsec"), which the DCR above already collects. Unlike
+# the NPMplus access log (only "IP got a 403"), these rows carry the reason:
+# the CRS category (lfi, sql_injection, xss, appsec-native, ...) and the
+# anomaly score — and they also cover attacks that got a 302 from the identity
+# gate and therefore never show up as 403s.
+#
+# CrowdSecAlerts is a workspace function, usable in any query or rule:
+#   CrowdSecAlerts | where AttackType == "sql_injection" | summarize count() by SourceIP
+# TimeGenerated is the alert's own creation time (not the forwarding time),
+# and rows are de-duplicated by CrowdSec alert id.
+resource "azurerm_log_analytics_saved_search" "crowdsec_alerts_function" {
+  name                       = "CrowdSecAlerts"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  category                   = "CrowdSec"
+  display_name               = "CrowdSecAlerts (parser)"
+  function_alias             = "CrowdSecAlerts"
+
+  query = <<-KQL
+    Syslog
+    | where ProcessName == "crowdsec"
+    | extend a = parse_json(SyslogMessage)
+    | project
+        TimeGenerated = coalesce(todatetime(a.created_at), TimeGenerated),
+        AlertId       = tolong(a.alert_id),
+        SourceIP      = tostring(a.source_ip),
+        AttackType    = tostring(a.attack_types[0]),
+        AttackTypes   = a.attack_types,
+        AnomalyScore  = toint(a.anomaly_score),
+        Scenario      = tostring(a.scenario),
+        Country       = tostring(a.country),
+        AsName        = tostring(a.as_name),
+        EventsCount   = toint(a.events_count),
+        Decision      = tostring(a.decision),
+        TargetUris    = a.target_uris,
+        UserAgents    = a.user_agents,
+        Computer
+    | summarize arg_max(TimeGenerated, *) by AlertId
+  KQL
+}
+
+resource "azurerm_log_analytics_saved_search" "crowdsec_attackers_by_type" {
+  name                       = "crowdsec-attackers-by-type"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  category                   = "CrowdSec"
+  display_name               = "CrowdSec: attacker IPs by attack type (last 24 h)"
+
+  query = <<-KQL
+    CrowdSecAlerts
+    | where TimeGenerated > ago(1d)
+    | summarize
+        Alerts     = count(),
+        MaxScore   = max(AnomalyScore),
+        Scenarios  = make_set(Scenario, 10),
+        SampleUris = make_set(TargetUris, 5),
+        FirstSeen  = min(TimeGenerated),
+        LastSeen   = max(TimeGenerated)
+      by AttackType, SourceIP, Country, AsName
+    | order by AttackType asc, Alerts desc
+  KQL
+
+  depends_on = [azurerm_log_analytics_saved_search.crowdsec_alerts_function]
+}
+
+resource "azurerm_log_analytics_saved_search" "crowdsec_attacks_per_day" {
+  name                       = "crowdsec-attacks-per-day"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  category                   = "CrowdSec"
+  display_name               = "CrowdSec: attacks per day by type"
+
+  query = <<-KQL
+    CrowdSecAlerts
+    | where TimeGenerated > ago(30d)
+    | summarize Alerts = count(), AttackerIPs = dcount(SourceIP)
+      by Day = startofday(TimeGenerated), AttackType
+    | order by Day desc, Alerts desc
+  KQL
+
+  depends_on = [azurerm_log_analytics_saved_search.crowdsec_alerts_function]
+}

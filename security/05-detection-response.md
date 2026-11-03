@@ -64,6 +64,36 @@ KQL behind the rule, over the whole day:
 | `curl` from the blocked Cloud Shell IP | `000`: no TCP connection, dropped by the NSG |
 | `curl` from the operator's Mac | `302`: legitimate user unaffected |
 
+## CrowdSec alerts in Sentinel (attack type per IP)
+
+The access log only says "IP X got a 403". *Why* it was blocked (CRS
+category and anomaly score, e.g. `anomaly score block: sql_injection: 40,
+anomaly: 40,`) exists only in CrowdSec. `scripts/setup-crowdsec-logging.sh`
+installs `crowdsec-alert-forwarder` on the VM: every 30 s it reads new alerts
+with `cscli alerts list -o json` and sends each one as JSON to syslog `local0`
+(tag `crowdsec`). The existing DCR already collects `local0`, so nothing in
+the ingestion pipeline changes.
+
+`sentinel.tf` adds the workspace function **`CrowdSecAlerts`** and two saved
+searches (Logs → Queries → category *CrowdSec*):
+
+| Saved search | Shows |
+|---|---|
+| CrowdSec: attacker IPs by attack type (last 24 h) | `AttackType`, `SourceIP`, country, AS, score, sample URIs |
+| CrowdSec: attacks per day by type | alerts and distinct attacker IPs per day and type |
+
+```kql
+CrowdSecAlerts
+| where TimeGenerated > ago(1d) and AttackType == "sql_injection"
+| summarize Alerts = count() by SourceIP, Country
+| order by Alerts desc
+```
+
+This also covers part of the blind spot below: CrowdSec AppSec inspects
+requests that the identity gate answers with `302`. `TimeGenerated` in
+`CrowdSecAlerts` is the alert's own creation time; on its first start the
+forwarder back-fills the last 24 h.
+
 ## Findings from Day 5
 
 1. **The auto-block could only ever block one attacker.** The playbook
