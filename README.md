@@ -65,7 +65,7 @@ Details are in the [Findings tracker](#findings-tracker).
 
 1. **Secrets** (F-09, F-10): the DB admin password is in plaintext in the systemd unit (world-readable), in `custom_data` and in Terraform state, and the app uses the admin account. → dedicated least-privilege DB role; **Key Vault** + managed identity, or **Entra ID auth for PostgreSQL** (no password at all).
 2. **Authorization** (F-17): any user of the tenant can sign in, and every user can `DELETE` all entries. → "Assignment required" + group; per-action authorization in the app.
-3. **Detection blind spot:** unauthenticated attacks get `302` before the WAF sees them, so the 403-based rule cannot fire. → alert on `302` bursts, run AppSec before `auth_request`, or ship CrowdSec alerts to Sentinel. CrowdSec alerts are now in Sentinel (`CrowdSecAlerts`), but AppSec does not see these requests either; only CrowdSec's log-based scenarios can (log acquisition path fixed, see `security/05-detection-response.md`).
+3. **Detection blind spot:** unauthenticated attacks get `302` before the WAF sees them, so the 403-based rule cannot fire. → alert on `302` bursts, run AppSec before `auth_request`, or ship CrowdSec alerts to Sentinel. Now covered by a second Sentinel rule on `CrowdSecAlerts`: CrowdSec's log-based scenarios read `access.log` whatever the status code, and their alerts trigger the same auto-block (see `security/05-detection-response.md`). AppSec itself still does not see these requests.
 4. **Manual state:** TLS, WAF, oauth2-proxy and the Entra ID app are configured by hand. → codify (`azuread` provider, setup scripts) or use managed services: Application Gateway / Front Door WAF, App Service authentication.
 5. **Supply chain & state** (F-13, F-15): pin `crowdsec:latest`, patch management for the VM (security updates pending at boot), remote Terraform state with RBAC.
 6. **Response hygiene:** block rules never expire, and the incidents are still "New". → TTL, allow-list, analyst triage.
@@ -75,7 +75,7 @@ Details are in the [Findings tracker](#findings-tracker).
 - **Ubuntu VM** (Standard_D2s_v6 by default, configurable via `vm_size`) in `snet-app`, running the FastAPI app (localhost only), NPMplus (reverse proxy + Let's Encrypt), CrowdSec (WAF) and oauth2-proxy
 - **Azure PostgreSQL Flexible Server** (B1ms) injected into the delegated subnet `snet-db`, with a private DNS zone and **no public endpoint**
 - **NSG** with standalone rules: SSH only from `admin_source_ip`, HTTP/HTTPS from anywhere. Priorities 100–999 are reserved for Sentinel auto-block rules
-- **Log Analytics + Microsoft Sentinel**: syslog via Azure Monitor Agent, a WAF-attack analytics rule, and a Logic App playbook that blocks attacker IPs in the NSG
+- **Log Analytics + Microsoft Sentinel**: syslog via Azure Monitor Agent, two analytics rules (WAF 403 volume, CrowdSec alerts), and a Logic App playbook that blocks attacker IPs in the NSG
 - **CrowdSec alerts in Sentinel**: `CrowdSecAlerts` KQL function and saved searches (attack type per IP); the VM side is installed by `scripts/setup-crowdsec-logging.sh`
 
 > TLS, the WAF bouncer, the Entra ID app registration and oauth2-proxy are configured as described in the per-day documents. They are not created by `terraform apply`.
@@ -123,7 +123,7 @@ was changed, how, and how the fix was verified.
 | F-11 | Default NPMplus admin credentials | High | Day 2 (password changed; default still in script) |
 | F-12 | SSH host key verification disabled in deploy.py | Low | |
 | F-13 | Unpinned images / dependencies | Low–Medium | |
-| F-14 | No detection / response | Medium | Day 5 (403-based; blind spot behind the identity gate) |
+| F-14 | No detection / response | Medium | Day 5 (403 rule + CrowdSec alert rule, both auto-block) |
 | F-15 | Local unencrypted Terraform state | Medium | |
 | F-16 | Flat network, VM with public IP | Medium | Day 4 (partially: DB subnet; VM still public) |
 | F-17 | oauth2-proxy allows any tenant user | Low–Medium | |
