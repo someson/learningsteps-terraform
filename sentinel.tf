@@ -318,3 +318,94 @@ resource "azurerm_log_analytics_saved_search" "crowdsec_attacks_per_day" {
 
   depends_on = [azurerm_log_analytics_saved_search.crowdsec_alerts_function]
 }
+
+# ── Sentinel Analytics Rule: CrowdSec attacker (Scheduled) ────────────────────
+# Second detection path next to the 403-based rule above. It reads the alerts
+# that CrowdSec itself raised (CrowdSecAlerts), so it fires on:
+#   - AppSec / CRS blocks ("anomaly score block: ...", appsec-native), and
+#   - CrowdSec's log-based scenarios (http-probing, http-sqli-probbing,
+#     http-path-traversal-probing, ...). These read access.log regardless of
+#     the status code, so they also see unauthenticated attacks that the
+#     identity gate answers with 302 — the blind spot of the 403 rule.
+#
+# Threshold: 3+ AppSec anomaly blocks per IP, or any other CrowdSec alert.
+# Log-based scenarios are leaky buckets, so one alert already means "many
+# suspicious requests"; appsec-native are virtual patches for known CVEs.
+# A single CRS anomaly hit can be a false positive of a real user, hence 3.
+#
+# Severity High -> the existing automation rule runs the block-IP playbook.
+# The operator's admin_source_ip and private / loopback ranges are excluded
+# so the operator can never block themselves.
+#
+# Window: query_period 15 min, run every 5 min. The 10 min overlap tolerates
+# Syslog ingestion delay; duplicate alerts for one IP are merged into one
+# incident by the grouping block (1 h), so the playbook runs once per IP.
+locals {
+  admin_source_cidr = strcontains(var.admin_source_ip, "/") ? var.admin_source_ip : "${var.admin_source_ip}/32"
+}
+
+resource "azurerm_sentinel_alert_rule_scheduled" "crowdsec_attacker" {
+  name                       = "crowdsec-attacker-scheduled"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  display_name               = "CrowdSec — Attacker Detected by WAF or Log Scenario"
+  description                = "An external IP triggered 3+ CrowdSec AppSec anomaly blocks, or any CrowdSec log-based scenario / virtual patch, within 15 minutes. Covers unauthenticated attacks that never produce a 403."
+  severity                   = "High"
+  enabled                    = true
+  query_frequency            = "PT5M"
+  query_period               = "PT15M"
+  trigger_operator           = "GreaterThan"
+  trigger_threshold          = 0
+
+  query = <<-KQL
+    CrowdSecAlerts
+    | where isnotempty(SourceIP)
+    | where not(ipv4_is_private(SourceIP)) and not(ipv4_is_in_range(SourceIP, "127.0.0.0/8"))
+    | where not(ipv4_is_in_range(SourceIP, "${local.admin_source_cidr}"))
+    | summarize
+        Alerts        = count(),
+        AnomalyBlocks = countif(Scenario startswith "anomaly score block"),
+        OtherAlerts   = countif(not(Scenario startswith "anomaly score block")),
+        AttackTypes   = make_set(AttackType, 10),
+        Scenarios     = make_set(Scenario, 10),
+        MaxScore      = max(AnomalyScore),
+        FirstSeen     = min(TimeGenerated),
+        LastSeen      = max(TimeGenerated)
+      by SourceIP
+    | where AnomalyBlocks >= 3 or OtherAlerts > 0
+    | project TimeGenerated = LastSeen, SourceIP, Alerts, AttackTypes, Scenarios, MaxScore, FirstSeen
+  KQL
+
+  entity_mapping {
+    entity_type = "IP"
+    field_mapping {
+      identifier  = "Address"
+      column_name = "SourceIP"
+    }
+  }
+
+  custom_details = {
+    Alerts      = "Alerts"
+    AttackTypes = "AttackTypes"
+    Scenarios   = "Scenarios"
+  }
+
+  event_grouping {
+    aggregation_method = "AlertPerResult"
+  }
+
+  incident {
+    create_incident_enabled = true
+    grouping {
+      enabled                 = true
+      lookback_duration       = "PT1H"
+      entity_matching_method  = "Selected"
+      by_entities             = ["IP"]
+      reopen_closed_incidents = false
+    }
+  }
+
+  depends_on = [
+    azurerm_sentinel_log_analytics_workspace_onboarding.main,
+    azurerm_log_analytics_saved_search.crowdsec_alerts_function,
+  ]
+}

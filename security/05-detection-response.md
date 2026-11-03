@@ -96,6 +96,25 @@ AppSec alert either. Only CrowdSec's log-based scenarios (which read
 `CrowdSecAlerts` is the alert's own creation time; on its first start the
 forwarder back-fills the last 24 h.
 
+## Second detection rule: CrowdSec attacker
+
+`sentinel.tf` → `azurerm_sentinel_alert_rule_scheduled.crowdsec_attacker`
+("CrowdSec — Attacker Detected by WAF or Log Scenario", **High**). It reads
+`CrowdSecAlerts` instead of HTTP status codes:
+
+| Fires when, per external IP in 15 min | Why this threshold |
+|---|---|
+| 3+ AppSec anomaly blocks (`anomaly score block: …`) | one CRS hit can be a false positive of a real user |
+| any other CrowdSec alert (`crowdsecurity/http-*` scenarios, `appsec-native`) | log scenarios are leaky buckets (already many requests); native rules are virtual patches for known CVEs |
+
+The log-based scenarios read `access.log` whatever the status code was, so
+this rule also catches unauthenticated attacks that got `302` from the
+identity gate, the blind spot of the 403 rule. Excluded: `admin_source_ip`,
+private and loopback ranges (no self-block). The rule runs every 5 min over
+15 min (tolerates ingestion delay); alerts for the same IP within 1 h are
+grouped into one incident, so the playbook runs once per IP. Severity High →
+the existing automation rule → the same block-IP playbook → NSG Deny.
+
 ## Findings from Day 5
 
 1. **The auto-block could only ever block one attacker.** The playbook
@@ -141,9 +160,13 @@ Fix: `/opt/npmplus/nginx/logs/*.log` in `scripts/setup-npmplus.sh`.
   incidents.
 - NSG rules have hard limits (1,000 rules per NSG). A busy scanner wave could
   exhaust them. Production: Azure Firewall / Front Door WAF IP sets.
-- Detection only on HTTP 403 volume. No detection for SSH (`auth`/`authpriv`
-  are collected but have no rule), slow attacks under the threshold, or
-  data access anomalies.
+- Detection on HTTP 403 volume and on CrowdSec alerts. Still no detection
+  for SSH (`auth`/`authpriv` are collected but have no rule), slow attacks
+  under the thresholds, or data access anomalies.
+- More automated triggers mean more chances to block a legitimate IP
+  permanently (e.g. a shared NAT address that also sends CRS false positives).
+  The thresholds above and the admin exclusion limit this; a TTL on block
+  rules is still missing.
 - ~10 minutes to respond is fine for scanners, too slow for a targeted
   exploit. NRT (near-real-time) rules would cut this.
 - Incidents #1 and #2 are still **New**. An analyst should triage it, close it and
